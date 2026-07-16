@@ -565,7 +565,7 @@ void GAMEPAD_ProcessSticks(struct GamepadSystem *gGamepads)
 
 				if (iVar4 < 0)
 				{
-					iVar7 = ((-10 - iVar4) - rwd->deadZone) * 8;
+					iVar7 = ((-10 - iVar4) - rwd->range) * 8;
 					if (iVar7 < 0)
 					{
 						iVar7 = 0;
@@ -584,7 +584,7 @@ void GAMEPAD_ProcessSticks(struct GamepadSystem *gGamepads)
 				}
 				else
 				{
-					iVar7 = ((iVar4 - 10) - rwd->deadZone) * 8;
+					iVar7 = ((iVar4 - 10) - rwd->range) * 8;
 					if (iVar7 < 0)
 					{
 						iVar7 = 0;
@@ -726,7 +726,7 @@ void GAMEPAD_ProcessMotors(struct GamepadSystem *gGS)
 							u8 jogStrength = pad->unk42;
 							bVar1 = jogStrength >> 4;
 
-							if ((((Ctrds_RetailTicks() & bVar1) & 0xf) != 0) && (bVar1 = (jogStrength - 0x10) >> 4, (jogStrength - 0x10) < 0))
+							if ((((Ctrds_RetailTicks() & jogStrength) & 0xf) != 0) && (bVar1 = (jogStrength - 0x10) >> 4, (jogStrength - 0x10) < 0))
 							{
 								bVar1 = 0;
 							}
