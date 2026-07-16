@@ -302,11 +302,7 @@ void MainFrame_GameLogic(struct GameTracker *gGT, struct GamepadSystem *gGamepad
 		Ctrds_BeginFrameGating();
 #endif
 
-		// NOTE(ctrds): ctrpad narrows this to `iVar4 < PAUSE`, dropping the
-		// PAUSE bucket. That is a behavioural change of theirs, unrelated to
-		// the 64-bit work being taken here, and it would alter the 32-bit
-		// build that is serving as this conversion's reference.
-		for (iVar4 = 0; iVar4 < NUM_BUCKETS; iVar4++)
+		for (iVar4 = 0; iVar4 < PAUSE; iVar4++)
 		{
 			if ((((gGT->gameMode1 & DEBUG_MENU) == 0) || ((gGT->threadBuckets[iVar4].boolCantPause & 1) != 0)) &&
 
