@@ -249,6 +249,10 @@ int RB_CrateWeapon_ThCollide(struct Thread *crateThread, struct Thread *collidin
 			{
 				return 1;
 			}
+			if ((driver->actionsFlagSet & ACTION_BOT) != 0)
+			{
+				return 1;
+			}
 
 			if ((driver->heldItemID != HELD_ITEM_NONE) && (driver->noItemTimer == 0))
 			{
