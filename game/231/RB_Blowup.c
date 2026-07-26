@@ -110,6 +110,15 @@ void RB_Blowup_Init(struct Instance *weaponInst)
 	}
 #endif
 
+#if defined(CTR_NATIVE)
+	// NOTE(aalhendi): Retail assumes the thread and instance pools have capacity. Native
+	// preserves the explosion damage when either optional visual cannot spawn.
+	if (explosionInst == NULL)
+	{
+		goto ApplyDamage;
+	}
+#endif
+
 	explosionInst->flags |= (VISIBLE_DURING_GAMEPLAY | DRAW_BILLBOARD);
 
 	explosionTh = explosionInst->thread;
@@ -152,6 +161,13 @@ void RB_Blowup_Init(struct Instance *weaponInst)
 
 	// set shockwave instance
 	blowup->instances[0] = shockwaveInst;
+
+#if defined(CTR_NATIVE)
+	if (shockwaveInst == NULL)
+	{
+		goto ApplyDamage;
+	}
+#endif
 
 #if defined(CTR_NATIVE)
 	if (shockwaveInst == NULL)
