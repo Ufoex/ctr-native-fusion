@@ -237,7 +237,7 @@ force_inline void AH_MaskHint_DrawRepeatPrompt(void)
 	r.x = -10;
 	r.y = 0xb0;
 	r.w = 0x214;
-	r.h = 8 + DecalFont_DrawMultiLine(sdata->lngStrings[lngIndex], 0x100, 0xb4, 400, 2, 0xffff8000);
+	r.h = 8 + DecalFont_DrawMultiLine(sdata->lngStrings[lngIndex], 0x100, 0xb4, 400, FONT_SMALL, JUSTIFY_CENTER | ORANGE);
 
 	RECTMENU_DrawInnerRect(&r, 4, gGT->backBuffer->otMem.uiOT);
 }

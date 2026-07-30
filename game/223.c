@@ -149,7 +149,7 @@ void RR_EndEvent_DrawMenu(void)
 	// driver->numTimeCrates = gGT->timeCratesInLEV;
 
 	// change color
-	textColor = (Ctrds_RetailTicks() & 1) ? 0xffff8000 : 0xffff8004;
+	textColor = (Ctrds_RetailTicks() & 1) ? (JUSTIFY_CENTER | ORANGE) : (JUSTIFY_CENTER | WHITE);
 
 	rewardBit = gGT->levelID + ADV_REWARD_FIRST_PLATINUM_RELIC;
 
@@ -490,7 +490,7 @@ skipRelicAwarded:
 	{
 		RR_EndEvent_DrawHighScore(0x100, 10, RR_SCORE_MODE_RELIC_RACE);
 
-		DecalFont_DrawLine(sdata->lngStrings[LNG_PRESS_TO_CONTINUE], 0x100, 0xbe, 1, 0xffff8000);
+		DecalFont_DrawLine(sdata->lngStrings[LNG_PRESS_TO_CONTINUE], 0x100, 0xbe, FONT_BIG, JUSTIFY_CENTER | ORANGE);
 
 		if ((sdata->AnyPlayerTap & RR_CONFIRM_BUTTON_MASK) != 0)
 		{
@@ -528,7 +528,7 @@ void RR_EndEvent_DrawHighScore(s16 startX, int startY, s16 scoreMode)
 	// interpolate fly-in
 	UI_Lerp2D_Linear(pos.v, startX, startY, startX, startY, sdata->framesSinceRaceEnded, RR_LERP_FRAMES);
 
-	DecalFont_DrawLine(sdata->lngStrings[LNG_BEST_TIMES], pos.x, pos.y, 1, 0xffff8000);
+	DecalFont_DrawLine(sdata->lngStrings[LNG_BEST_TIMES], pos.x, pos.y, FONT_BIG, JUSTIFY_CENTER | ORANGE);
 
 	// Draw icon, name, and time of the
 	// 5 best times in Time Trial
@@ -596,14 +596,14 @@ void RR_EndEvent_DrawHighScore(s16 startX, int startY, s16 scoreMode)
 	if (scoreMode == RR_SCORE_MODE_TIME_TRIAL)
 	{
 		// Change the way text flickers
-		timeColor = 0xffff8000;
+		timeColor = JUSTIFY_CENTER | ORANGE;
 
-		DecalFont_DrawLine(sdata->lngStrings[LNG_BEST_LAP], startX, startY + 0x95, 1, timeColor);
+		DecalFont_DrawLine(sdata->lngStrings[LNG_BEST_LAP], startX, startY + 0x95, FONT_BIG, timeColor);
 
 		// If you got a new best lap
 		if (((gGT->gameModeEnd & NEW_BEST_LAP) != 0) && ((Ctrds_RetailTicks() & RR_HIGH_SCORE_FLASH_TIMER_BIT) != 0))
 		{
-			timeColor = 0xffff8004;
+			timeColor = JUSTIFY_CENTER | WHITE;
 		}
 
 		// make a string for best lap
@@ -611,17 +611,17 @@ void RR_EndEvent_DrawHighScore(s16 startX, int startY, s16 scoreMode)
 	}
 	else
 	{
-		DecalFont_DrawLine(sdata->lngStrings[LNG_YOUR_TIME], startX, startY + 0x95, 1, 0xffff8000);
+		DecalFont_DrawLine(sdata->lngStrings[LNG_YOUR_TIME], startX, startY + 0x95, FONT_BIG, JUSTIFY_CENTER | ORANGE);
 
 		// make a string for your current track time
 		timeString = RECTMENU_DrawTime(driver->timeElapsedInRace);
 
 		// color
-		timeColor = 0xffff8000;
+		timeColor = JUSTIFY_CENTER | ORANGE;
 	}
 
 	// Print amount of time, for whichever purpose
-	DecalFont_DrawLine(timeString, startX, startY + 0xa6, 2, timeColor);
+	DecalFont_DrawLine(timeString, startX, startY + 0xa6, FONT_SMALL, timeColor);
 
 	box.x = pos.x - 0x60;
 	box.y = pos.y - 4;

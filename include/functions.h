@@ -86,7 +86,7 @@ void CTR_Box_DrawSolidBox(RECT *r, Color color, uint32_t *ot);
 
 // decal
 u32 DecalFont_boolRacingWheel(void);
-void DecalFont_DrawLine(char *str, int posX, int posY, s16 fontType, int flags);
+void DecalFont_DrawLine(char *str, s16 posX, s16 posY, s16 fontType, s16 flags);
 void DecalFont_DrawLineStrlen(char *str, s16 len, int posX, s16 posY, s16 fontType, int flags);
 int DecalFont_DrawMultiLine(char *str, int posX, int posY, int maxPixLen, s16 fontType, int flags);
 void DecalGlobal_EmptyFunc_MainFrame_ResetDB(void);

@@ -664,7 +664,7 @@ void UI_VsQuipDrawAll(void)
 		RECTMENU_DrawQuip(print,
 		                  (r->x + (r->w >> 1)), // 50% width
 		                  (r->y + (r->h >> 3)), // 12% height
-		                  0, 3, 0xffff8000, 4);
+		                  0, FONT_CREDITS, JUSTIFY_CENTER | ORANGE, 4);
 	}
 }
 

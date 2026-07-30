@@ -127,18 +127,18 @@ void SelectProfile_DrawAdvProfile(struct AdvProgress *adv, int posX, int posY, s
 	if ((menuFlag & SELECT_PROFILE_DRAW_STYLE_GREEN) != 0)
 	{
 		iconColor = sdata->greenColor;
-		numberColor = 0x1d;
-		emptyColor = 0x1e;
-		nameColor = 0x1d;
-		percentColor = 0x1d;
+		numberColor = LIGHT_GREEN;
+		emptyColor = FOREST_GREEN;
+		nameColor = LIGHT_GREEN;
+		percentColor = LIGHT_GREEN;
 	}
 	else
 	{
 		iconColor = sdata->greyColor;
-		numberColor = 0;
-		emptyColor = 3;
-		nameColor = 1;
-		percentColor = 4;
+		numberColor = ORANGE;
+		emptyColor = RED;
+		nameColor = PERIWINKLE;
+		percentColor = WHITE;
 	}
 
 	slotIndex *= 3;
@@ -146,11 +146,11 @@ void SelectProfile_DrawAdvProfile(struct AdvProgress *adv, int posX, int posY, s
 
 	if (adv->characterID < 0)
 	{
-		DecalFont_DrawLine(sdata->lngStrings[LNG_EMPTY], posX + 0x6c, posY + 0x17, FONT_BIG, emptyColor | 0xffff8000);
+		DecalFont_DrawLine(sdata->lngStrings[LNG_EMPTY], posX + 0x6c, posY + 0x17, FONT_BIG, JUSTIFY_CENTER | emptyColor);
 	}
 	else
 	{
-		int profileTextColor = numberColor | 0x4000;
+		int profileTextColor = JUSTIFY_RIGHT | numberColor;
 		int characterID = adv->characterID;
 		int iconID = data.MetaDataCharacters[characterID].iconID;
 		struct SelectProfileLoadSaveObj *obj = sdata->ptrLoadSaveObj;
@@ -158,7 +158,7 @@ void SelectProfile_DrawAdvProfile(struct AdvProgress *adv, int posX, int posY, s
 		RECTMENU_DrawPolyGT4(gGT->ptrIcons[iconID], posX + 10, posY + 6, &gGT->backBuffer->primMem, gGT->pushBuffer_UI.ptrOT, iconColor, iconColor, iconColor,
 		                     iconColor, 1, 0x1000);
 
-		DecalFont_DrawLine(adv->name, posX + 0x6c, posY + 0x29, FONT_BIG, nameColor | 0xffff8000);
+		DecalFont_DrawLine(adv->name, posX + 0x6c, posY + 0x29, FONT_BIG, JUSTIFY_CENTER | nameColor);
 
 		SelectProfile_PrintInteger(gGT->currAdvProfile.completionPercent, posX + 0x6a, posY + 0x17, 0, profileTextColor);
 		SelectProfile_PrintInteger(gGT->currAdvProfile.numTrophies, posX + 0x6a, posY + 5, 0, profileTextColor);
@@ -406,7 +406,7 @@ void SelectProfile_DrawGhostProfile(struct GhostProfile *profile, int posX, int 
 
 	if (isUnavailable != 0)
 	{
-		DecalFont_DrawLine(sdata->lngStrings[LNG_NOT_AVAILABLE], posX + 0x64, posY + 0x11, FONT_SMALL, 0xffff8016);
+		DecalFont_DrawLine(sdata->lngStrings[LNG_NOT_AVAILABLE], posX + 0x64, posY + 0x11, FONT_SMALL, JUSTIFY_CENTER | SILVER);
 		Color redColor = {.self = (u32)sdata->redColor};
 		CTR_Box_DrawClearBox(&innerRect, &redColor, ADD_DECAL, gGT->backBuffer->otMem.uiOT);
 	}
@@ -416,15 +416,15 @@ void SelectProfile_DrawGhostProfile(struct GhostProfile *profile, int posX, int 
 		struct MetaDataLEV *mdLev = &data.metaDataLEV[profile->trackID];
 		int iconID = data.MetaDataCharacters[profile->characterID].iconID;
 
-		DecalFont_DrawLine(sdata->lngStrings[mdLev->name_LNG], posX + 0x64, posY + 0x1e, FONT_SMALL, 0xffff801d);
-		DecalFont_DrawLine(RECTMENU_DrawTime(profile->trackTime), posX + 0x78, posY + 10, FONT_BIG, 0xffff8001);
+		DecalFont_DrawLine(sdata->lngStrings[mdLev->name_LNG], posX + 0x64, posY + 0x1e, FONT_SMALL, JUSTIFY_CENTER | LIGHT_GREEN);
+		DecalFont_DrawLine(RECTMENU_DrawTime(profile->trackTime), posX + 0x78, posY + 10, FONT_BIG, JUSTIFY_CENTER | PERIWINKLE);
 		RECTMENU_DrawPolyGT4(gGT->ptrIcons[iconID], posX + 8, posY + 5, &gGT->backBuffer->primMem, gGT->pushBuffer_UI.ptrOT, sdata->ghostIconColor,
 		                     sdata->ghostIconColor, sdata->ghostIconColor, sdata->ghostIconColor, TRANS_50_DECAL, 0x1000);
 	}
 	else
 	{
 		int lngIndex = (isLoading != 0) ? 0x6c : 0xb5;
-		int color = (isLoading != 0) ? 0xffff8001 : 0xffff8003;
+		int color = JUSTIFY_CENTER | ((isLoading != 0) ? PERIWINKLE : RED);
 
 		DecalFont_DrawLine(sdata->lngStrings[lngIndex], posX + 0x64, posY + 0x11, FONT_SMALL, color);
 	}
@@ -799,7 +799,7 @@ static void SelectProfile_DrawGhostRows(struct RectMenu *menu, int rowCount, int
 		yBase = 0x12;
 		if (sdata->memcardAction != SELECT_PROFILE_ACTION_SAVE)
 		{
-			DecalFont_DrawMultiLine(sdata->lngStrings[LNG_INSERT_ANY_MEMORY_CARD_WITH_GHOST_DATA_IN], 0x100, 0xbe, 0x1ce, FONT_SMALL, color | 0xffff8000);
+			DecalFont_DrawMultiLine(sdata->lngStrings[LNG_INSERT_ANY_MEMORY_CARD_WITH_GHOST_DATA_IN], 0x100, 0xbe, 0x1ce, FONT_SMALL, JUSTIFY_CENTER | color);
 		}
 	}
 	else
@@ -1171,11 +1171,11 @@ static void SelectProfile_DrawMemcardMessage(int screen, int color, int menuFlag
 			{
 				int font = (i == 0) ? FONT_BIG : FONT_SMALL;
 				int y = (i == 0) ? 0x26 : 0x2e + (i * (data.font_charPixHeight[FONT_SMALL] + 2));
-				int lineColor = color | 0xffff8000;
+				int lineColor = JUSTIFY_CENTER | color;
 
 				if (((sdata->frameCounter & 4) == 0) && (i == 0))
 				{
-					lineColor = RED | 0xffff8000;
+					lineColor = JUSTIFY_CENTER | RED;
 				}
 
 				DecalFont_DrawLine(line, 0x100, y, font, lineColor);

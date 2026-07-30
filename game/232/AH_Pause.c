@@ -155,7 +155,7 @@ void AH_Pause_Draw(s32 pageID, s32 posX)
 
 	char *titleString = sdata->lngStrings[lngIndex];
 
-	DecalFont_DrawLine(titleString, posX + AH_PAUSE_TITLE_CENTER_X, AH_PAUSE_TITLE_Y, FONT_BIG, 0xffff8000);
+	DecalFont_DrawLine(titleString, posX + AH_PAUSE_TITLE_CENTER_X, AH_PAUSE_TITLE_Y, FONT_BIG, JUSTIFY_CENTER | ORANGE);
 
 	s32 titleWidth = DecalFont_GetLineWidth(titleString, FONT_BIG);
 
@@ -484,7 +484,7 @@ void AH_Pause_Draw(s32 pageID, s32 posX)
 
 		sprintf(totalString, "%s %d", sdata->lngStrings[LNG_TOTAL], relicTotal);
 
-		DecalFont_DrawLine(totalString, posX + AH_PAUSE_TITLE_CENTER_X, AH_PAUSE_TOTAL_TEXT_Y, FONT_BIG, 0xffff8000);
+		DecalFont_DrawLine(totalString, posX + AH_PAUSE_TITLE_CENTER_X, AH_PAUSE_TOTAL_TEXT_Y, FONT_BIG, JUSTIFY_CENTER | ORANGE);
 	}
 
 	s32 titleFrameTextWidth = DecalFont_GetLineWidth(titleString, FONT_BIG);

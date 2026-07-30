@@ -285,7 +285,7 @@ void CS_Garage_MenuProc(struct RectMenu *menu)
 	char *name = sdata->lngStrings[nameIndex];
 
 	// Draw character name
-	DecalFont_DrawLine(name, GARAGE_CHARACTER_NAME_X, GARAGE_CHARACTER_NAME_Y, FONT_BIG, 0xffff8000);
+	DecalFont_DrawLine(name, GARAGE_CHARACTER_NAME_X, GARAGE_CHARACTER_NAME_Y, FONT_BIG, JUSTIFY_CENTER | ORANGE);
 
 	int arrowColor = ORANGE;
 
