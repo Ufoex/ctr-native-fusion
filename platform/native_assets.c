@@ -803,10 +803,17 @@ internal void NativeAssets_PrintFooter(void)
 	        NATIVE_ASSETS_TEST_STR_PATH, NATIVE_ASSETS_XNF_PATH, NATIVE_ASSETS_XNF_PATH);
 }
 
-internal int NativeAssets_CheckRequiredFile(const char *path)
+internal int NativeAssets_HasFile(const char *path)
 {
 	char assetPath[NATIVE_ASSETS_PATH_MAX];
 	struct NativeDiscImageFile discFile;
+
+	return NativeAssets_ResolvePath(path, assetPath, sizeof(assetPath)) || NativeDiscImage_FindFile(path, &discFile);
+}
+
+internal int NativeAssets_CheckRequiredFile(const char *path)
+{
+	char assetPath[NATIVE_ASSETS_PATH_MAX];
 
 	if (!NativeAssets_BuildPath(path, assetPath, sizeof(assetPath)))
 	{
@@ -814,12 +821,7 @@ internal int NativeAssets_CheckRequiredFile(const char *path)
 		return 0;
 	}
 
-	if (NativeAssets_ResolvePath(path, assetPath, sizeof(assetPath)))
-	{
-		return 1;
-	}
-
-	if (NativeDiscImage_FindFile(path, &discFile))
+	if (NativeAssets_HasFile(path))
 	{
 		return 1;
 	}
@@ -836,18 +838,23 @@ internal int NativeAssets_ValidateXA(void)
 	    "XA/ENG/GAME",
 	};
 	struct NativeAssetsByteBuffer xnf;
+	char manifestPath[NATIVE_ASSETS_PATH_MAX];
 	u8 required[NATIVE_ASSETS_XA_TYPE_COUNT][NATIVE_ASSETS_XA_MAX_FILE_NUMBER];
 	u32 numXasTotal;
 	u32 numTracksTotal;
 	u32 entryOffset;
-	u32 entryEnd;
 	u32 missing = 0;
 	u32 categoryID;
 
 	memset(required, 0, sizeof(required));
 
-	if (!NativeAssets_ReadBytes(NATIVE_ASSETS_XNF_PATH, NATIVE_ASSET_READ_DATA_FILE, &xnf))
+	// Do not hide an empty or unreadable extracted override behind disc data.
+	int loaded = NativeAssets_ResolvePath(NATIVE_ASSETS_XNF_PATH, manifestPath, sizeof(manifestPath))
+	                 ? NativeAssets_ReadHostBytes(NATIVE_ASSETS_XNF_PATH, &xnf)
+	                 : NativeAssets_ReadBytes(NATIVE_ASSETS_XNF_PATH, NATIVE_ASSET_READ_DATA_FILE, &xnf);
+	if (!loaded)
 	{
+		fprintf(stderr, "[CTR Native] unable to read XA manifest: %s\n", NATIVE_ASSETS_XNF_PATH);
 		return 0;
 	}
 
@@ -861,10 +868,17 @@ internal int NativeAssets_ValidateXA(void)
 
 	numXasTotal = NativeAssets_ReadLE32(&xnf.data[NATIVE_ASSETS_XA_NUM_XAS_TOTAL_OFFSET]);
 	numTracksTotal = NativeAssets_ReadLE32(&xnf.data[NATIVE_ASSETS_XA_NUM_TRACKS_TOTAL_OFFSET]);
-	entryOffset = NATIVE_ASSETS_XA_HEADER_SIZE + numXasTotal * 4u;
-	entryEnd = entryOffset + numTracksTotal * NATIVE_ASSETS_XA_ENTRY_BYTES;
 
-	if ((entryEnd < entryOffset) || (entryEnd > (u32)xnf.size))
+	// Bound both tables before multiplying untrusted counts into byte offsets.
+	if (numXasTotal > ((u32)xnf.size - NATIVE_ASSETS_XA_HEADER_SIZE) / 4u)
+	{
+		NativeAssets_FreeBytes(&xnf);
+		Platform_LogError("[CTR Native] invalid XA position table: %s\n", NATIVE_ASSETS_XNF_PATH);
+		return 0;
+	}
+	entryOffset = NATIVE_ASSETS_XA_HEADER_SIZE + numXasTotal * 4u;
+
+	if (numTracksTotal > ((u32)xnf.size - entryOffset) / NATIVE_ASSETS_XA_ENTRY_BYTES)
 	{
 		NativeAssets_FreeBytes(&xnf);
 		Platform_LogError("[CTR Native] invalid XA entry table: %s\n", NATIVE_ASSETS_XNF_PATH);
@@ -901,7 +915,6 @@ internal int NativeAssets_ValidateXA(void)
 		{
 			char relativePath[256];
 			char path[NATIVE_ASSETS_PATH_MAX];
-			struct NativeDiscImageFile discFile;
 			int written;
 
 			if (!required[categoryID][fileNumber])
@@ -917,7 +930,7 @@ internal int NativeAssets_ValidateXA(void)
 				continue;
 			}
 
-			if (!NativeAssets_ResolvePath(relativePath, path, sizeof(path)) && !NativeDiscImage_FindFile(relativePath, &discFile))
+			if (!NativeAssets_HasFile(relativePath))
 			{
 				Platform_LogError("[CTR Native] missing XA asset: %s\n", path);
 				missing++;
@@ -925,7 +938,7 @@ internal int NativeAssets_ValidateXA(void)
 		}
 	}
 
-	return missing == 0;
+	return 1;
 }
 
 int NativeAssets_Validate(void)

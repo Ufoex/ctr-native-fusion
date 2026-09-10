@@ -185,6 +185,14 @@ The full extracted asset list is:
 - `XA/ENG/GAME/S00.XA` through `S20.XA`
 - `XA/MUSIC/S00.XA` through `S01.XA`
 
+`BIGFILE.BIG` and `SOUNDS/KART.HWL` are always required. `TEST.STR` and the
+XA/XNF audio are optional: startup skips checking for them when
+`CTR_SKIP_AV_ASSETS=1` is set, the launcher's "skip audio/video assets"
+setting is on, or a `ctrds_skip_av` marker file sits next to the assets
+(mainly for Android, which has no practical way to set an environment
+variable). Without one of those, a missing or invalid XA manifest is a
+startup error.
+
 ## Bug Replays
 
 Internal builds can record a small bug report folder. See `docs/REPLAYS.md`.
