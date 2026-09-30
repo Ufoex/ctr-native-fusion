@@ -67,11 +67,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # allow_failure: Ubuntu's i386 archive has occasionally shipped a
-          # libglib2.0-dev:i386 that demands a libglib2.0-dev-bin:i386 build
-          # the same snapshot doesn't have yet (an upstream mirror skew, not
-          # anything this repo controls) -- true here keeps that from
-          # blocking the release the other three platforms are ready for.
+          # allow_failure: this leg's apt install used to pull in
+          # libpulse-dev:i386 -> libglib2.0-dev:i386, and Ubuntu's i386
+          # archive has occasionally lagged behind amd64 on the exact
+          # libglib2.0-dev-bin:i386 build that version demands (an upstream
+          # mirror skew, not anything this repo controls). Dropping
+          # libpulse-dev:i386 below avoids that specific chain; true stays
+          # here as a safety net for any other such skew, so it can't block
+          # the release the other three platforms are ready for.
           - name: Linux x86 (32-bit)
             os: ubuntu-24.04
             force32: "ON"
@@ -116,9 +119,15 @@ jobs:
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update
+          # No libpulse-dev:i386 here: it depends on libglib2.0-dev:i386, whose
+          # i386 archive is frequently a patch version behind the amd64 one
+          # already installed on the runner, making apt refuse the install.
+          # SDL3 detects libpulse-dev's absence and just disables that backend
+          # (ALSA/pipewire still cover audio), so this only costs PulseAudio
+          # on the 32-bit build.
           sudo apt-get install -y gcc-multilib g++-multilib \
             libx11-dev:i386 libxext-dev:i386 libxrandr-dev:i386 libxcursor-dev:i386 libxfixes-dev:i386 libxi-dev:i386 libxss-dev:i386 \
-            libxkbcommon-dev:i386 libgl1-mesa-dev:i386 libasound2-dev:i386 libpulse-dev:i386 libudev-dev:i386 libdbus-1-dev:i386 \
+            libxkbcommon-dev:i386 libgl1-mesa-dev:i386 libasound2-dev:i386 libudev-dev:i386 libdbus-1-dev:i386 \
             libwayland-dev:i386 libdecor-0-dev:i386
 
       - name: Configurar (Linux, 32-bit)
