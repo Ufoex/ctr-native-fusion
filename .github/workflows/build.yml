@@ -30,6 +30,10 @@ jobs:
 
       - name: Configurar Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # Google removed the legacy 'tools' package from the SDK repo;
+          # the action still requests it by default and fails licensing.
+          packages: platform-tools
 
       - name: Instalar SDK, NDK e CMake
         shell: bash
