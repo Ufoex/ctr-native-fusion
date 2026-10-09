@@ -16,6 +16,7 @@ extern DRAWENV activeDrawEnv;
 extern int g_GPUDisabledState;
 
 int NativeGpu_HasPendingSplits(void);
+int NativeGpu_PgxpEnabled(void);
 int NativeGpu_GetLastRendererDrawCount(void);
 void ClearSplits(void);
 void DrawAllSplits(void);
