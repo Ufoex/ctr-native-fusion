@@ -128,6 +128,515 @@ int NativeGpu_HasPendingSplits(void)
 	return s_gpu.splitIndex > 0;
 }
 
+//------------------------------------------------------------------------------------------------------------------------
+// PGXP - independent reimplementation written for this port. The PGXP concept
+// originates with iCatButler (PCSX-Reloaded, GPL-3.0); beetle-psx-libretro's
+// pgxp/ (GPL-2.0) and DuckStation were studied as architectural references
+// only - no code was copied. See CREDITS.md.
+//
+// PGXP (Parallel/Precision Geometry Transform Pipeline), textures only: the
+// GTE keeps a high-precision side channel of every transformed vertex (see
+// native_gte_core.c). The game copies the clamped s16 screen position into its
+// primitives; those are matched back to the transform and the renderer is
+// handed the view depth so it can interpolate texture coordinates
+// perspective-correctly. Vertex positions stay PSX-exact and the GTE registers
+// are never touched. 2D primitives are never eligible.
+//
+// Provenance is tracked by field ADDRESS (the "memory cache"): GTE stores bind
+// the destination field to its transform, copies chain, and the prim writers
+// bind the prim field. Coordinate matching on the push cache is only the
+// fallback for paths the writers do not instrument.
+//------------------------------------------------------------------------------------------------------------------------
+
+typedef struct
+{
+	s16 sx, sy;
+	u8 valid;
+	u8 contested; // two different vertices wanted this slot within one frame
+	u32 gen;
+	u32 seq;      // monotonic push sequence
+	u16 szLow;    // raw SZ register value (depth key for binding)
+	float w; // view-space depth (SZ units)
+} PgxpCachedVertex;
+
+#define PGXP_CACHE_SIZE (65536)
+#define PGXP_CACHE_WAYS (4)
+#define PGXP_CACHE_SETS (PGXP_CACHE_SIZE / PGXP_CACHE_WAYS)
+
+// Reject stale matches: entries older than this many epochs (~2 epochs advance
+// per frame in this port) are ignored, so a spot vacated by a moving object
+// does not hand its old depth to whatever lands there next.
+#define PGXP_FRESH_WINDOW (16)
+
+#define PGXP_SHADOW_SIZE (32768)
+// Bind freshness is judged in frame eras (epochs), not push distance: this port
+// transforms whole frames of vertices before the draw pass, so the
+// transform->store distance routinely exceeds a frame of pushes.
+// (sx, sy, SZ) uniqueness carries specificity; the era check only rejects old entries.
+#define PGXP_BIND_EPOCHS (8)    // ~4 frames for the SZ-matched path
+#define PGXP_XY_BIND_EPOCHS (2) // coordinate-only fallback: same frame only
+
+// Table B: a prim field address -> the transform bound to it.
+typedef struct
+{
+	const void *addr; // the prim field the value was stored into (&p->x0)
+	s16 sx, sy;       // low-precision values as stored (validated at draw)
+	u16 valid;
+	float w; // view-space depth (SZ units)
+} PgxpShadowEntry;
+
+// Table A: a posScreen field address -> the transform bound to it right after
+// the GTE store (CTR_GteStoreSXY*), consumed by the prim writers.
+#define PGXP_TRANSFORM_SIZE (32768)
+typedef struct
+{
+	const void *addr;
+	s16 sx, sy;
+	u16 valid;
+	u16 gen; // epoch of the bind (the chain must consume it promptly)
+	float w; // view-space depth (SZ units)
+} PgxpTransformEntry;
+
+internal PgxpCachedVertex s_pgxpCache[PGXP_CACHE_SIZE];
+internal PgxpShadowEntry s_pgxpShadow[PGXP_SHADOW_SIZE];
+internal PgxpTransformEntry s_pgxpTransform[PGXP_TRANSFORM_SIZE];
+internal u32 s_pgxpPushSeq = 0;
+internal u32 s_pgxpEpoch = 1;
+
+// Sticky packed-source handoff between the DrawLevel vertex packer and the
+// prim writer (adjacent expression; the packed value doubles as the guard).
+// Only ever compared and used as an address key, never dereferenced.
+internal uintptr_t s_pgxpPackedSrc = 0;
+internal u32 s_pgxpPackedSrcValue = 0;
+
+// Per-vertex side channel uploaded next to the vertex buffer: the view depth.
+// 0 means "no high-precision source, stay affine".
+internal float s_pgxpVertexData[MAX_VERTEX_BUFFER_SIZE];
+
+int NativeGpu_PgxpEnabled(void)
+{
+#if defined(__ANDROID__)
+	return 0;
+#else
+	return g_ctrds.pgxpTextures != 0;
+#endif
+}
+
+internal u32 Pgxp_AddrHash(const void *addr)
+{
+	return ((u32)(uintptr_t)addr >> 2) * 2654435761u;
+}
+
+internal u32 Pgxp_CoordHash(s16 sx, s16 sy)
+{
+	return ((u32)(u16)sx * 73856093u) ^ ((u32)(u16)sy * 19349663u);
+}
+
+// Freshest push at these exact coordinates within maxWindow epochs. When szLow
+// >= 0 the raw SZ register must match too: (sx, sy, SZ) is essentially unique,
+// so a bind cannot land on a different vertex that shares the pixel.
+internal const PgxpCachedVertex *Pgxp_FindFreshPush(s16 sx, s16 sy, int szLow, int maxWindow)
+{
+	const PgxpCachedVertex *set = &s_pgxpCache[(Pgxp_CoordHash(sx, sy) & (PGXP_CACHE_SETS - 1)) * PGXP_CACHE_WAYS];
+	const PgxpCachedVertex *best = NULL;
+
+	for (int way = 0; way < PGXP_CACHE_WAYS; way++)
+	{
+		const PgxpCachedVertex *c = &set[way];
+
+		if ((c->valid == 0) || (c->sx != sx) || (c->sy != sy))
+		{
+			continue;
+		}
+
+		if ((szLow >= 0) && (c->szLow != (u16)szLow))
+		{
+			continue;
+		}
+
+		if ((s_pgxpEpoch - c->gen) > (u32)maxWindow)
+		{
+			continue;
+		}
+
+		if ((best == NULL) || (c->seq > best->seq))
+		{
+			best = c;
+		}
+	}
+
+	return best;
+}
+
+// SZ-matched bind first; batched store paths (the SZ registers rotated past the
+// vertex) fall back to a tight coordinate-only bind instead of refusing.
+internal const PgxpCachedVertex *Pgxp_FindBindSource(s16 sx, s16 sy, int szLow)
+{
+	const PgxpCachedVertex *best = Pgxp_FindFreshPush(sx, sy, szLow, PGXP_BIND_EPOCHS);
+
+	if (best == NULL)
+	{
+		best = Pgxp_FindFreshPush(sx, sy, -1, PGXP_XY_BIND_EPOCHS);
+	}
+
+	return best;
+}
+
+// Called right after a raw GTE SXY store into a projected-vertex field.
+// szLow = the paired raw SZ register (MFC2 17/18/19), or -1 when unavailable.
+void Pgxp_NoteTransformStore(void *field, u32 packed, int szLow)
+{
+	if (!NativeGpu_PgxpEnabled())
+	{
+		return;
+	}
+
+	const s16 sx = (s16)packed;
+	const s16 sy = (s16)(packed >> 16);
+	PgxpTransformEntry *e = &s_pgxpTransform[Pgxp_AddrHash(field) & (PGXP_TRANSFORM_SIZE - 1)];
+	const PgxpCachedVertex *best = Pgxp_FindBindSource(sx, sy, szLow);
+
+	e->addr = field;
+
+	if (best != NULL)
+	{
+		e->sx = sx;
+		e->sy = sy;
+		e->w = best->w;
+		e->valid = 1;
+		e->gen = (u16)s_pgxpEpoch;
+	}
+	else
+	{
+		e->valid = 0;
+	}
+}
+
+// posScreen field copy (value chain): the destination resolves to the same
+// transform as the source.
+void Pgxp_NoteTransformCopy(void *dstField, const void *srcField)
+{
+	if (!NativeGpu_PgxpEnabled())
+	{
+		return;
+	}
+
+	PgxpTransformEntry *d = &s_pgxpTransform[Pgxp_AddrHash(dstField) & (PGXP_TRANSFORM_SIZE - 1)];
+	const PgxpTransformEntry *s = &s_pgxpTransform[Pgxp_AddrHash(srcField) & (PGXP_TRANSFORM_SIZE - 1)];
+
+	if ((s->valid != 0) && (s->addr == srcField))
+	{
+		*d = *s;
+		d->addr = dstField;
+	}
+	else
+	{
+		d->addr = dstField;
+		d->valid = 0;
+	}
+}
+
+// DrawLevel packer -> prim writer handoff.
+void Pgxp_SetPackedSource(const void *field, u32 packed)
+{
+	if (!NativeGpu_PgxpEnabled())
+	{
+		return;
+	}
+
+	s_pgxpPackedSrc = (uintptr_t)field;
+	s_pgxpPackedSrcValue = packed;
+}
+
+// Prim-field write: resolve the source (address chain, or the fresh push window
+// when there is no source address) into a shadow entry for the destination field.
+void Pgxp_NotePrimWrite(void *dstField, const void *srcField, u32 packed, int szLow)
+{
+	if (!NativeGpu_PgxpEnabled())
+	{
+		return;
+	}
+
+	const s16 sx = (s16)packed;
+	const s16 sy = (s16)(packed >> 16);
+	PgxpShadowEntry *e = &s_pgxpShadow[Pgxp_AddrHash(dstField) & (PGXP_SHADOW_SIZE - 1)];
+
+	e->addr = dstField;
+	e->valid = 0; // negative binding unless a source resolves below
+
+	if (srcField != NULL)
+	{
+		const PgxpTransformEntry *s = &s_pgxpTransform[Pgxp_AddrHash(srcField) & (PGXP_TRANSFORM_SIZE - 1)];
+
+		if ((s->valid != 0) && (s->addr == srcField) && (s->sx == sx) && (s->sy == sy) && ((s_pgxpEpoch - s->gen) <= 32))
+		{
+			e->sx = sx;
+			e->sy = sy;
+			e->w = s->w;
+			e->valid = 1;
+		}
+		return;
+	}
+
+	const PgxpCachedVertex *best = Pgxp_FindBindSource(sx, sy, szLow);
+
+	if (best != NULL)
+	{
+		e->sx = sx;
+		e->sy = sy;
+		e->w = best->w;
+		e->valid = 1;
+	}
+
+	// Otherwise this address did NOT receive fresh GTE output (UI literal /
+	// static / interpolated split vertex). The negative binding also clears any
+	// older positive one, so a reused field cannot satisfy a stale match.
+}
+
+void Pgxp_NotePrimWriteSticky(void *dstField, u32 packed)
+{
+	if (!NativeGpu_PgxpEnabled())
+	{
+		return;
+	}
+
+	// Consume the sticky source only when the value matches exactly (the
+	// packer/writer pair is adjacent); otherwise this write is not
+	// transform-sourced.
+	if ((s_pgxpPackedSrc != 0) && (s_pgxpPackedSrcValue == packed))
+	{
+		Pgxp_NotePrimWrite(dstField, (const void *)s_pgxpPackedSrc, packed, -1);
+	}
+	else
+	{
+		Pgxp_NotePrimWrite(dstField, NULL, packed, -1);
+	}
+
+	s_pgxpPackedSrc = 0;
+	s_pgxpPackedSrcValue = 0;
+}
+
+// RenderBucket writers (post-transform, no source address available): bind
+// against the fresh push window. szLow = the vertex's raw SZ register value
+// when known, else -1.
+void Pgxp_NoteSxyStore(const void *addrField, u32 packedSxy, int szLow)
+{
+	Pgxp_NotePrimWrite((void *)addrField, NULL, packedSxy, szLow);
+}
+
+// Returns 1 on a bound hit, -1 on a proven non-transform field, 0 when there is no binding.
+internal int Pgxp_LookupShadow(const void *v, float *w)
+{
+	const PgxpShadowEntry *e = &s_pgxpShadow[Pgxp_AddrHash(v) & (PGXP_SHADOW_SIZE - 1)];
+
+	if (e->addr != v)
+	{
+		return 0; // no binding for this field: fallback matching may apply
+	}
+
+	if (e->valid == 0)
+	{
+		return -1; // blocks coordinate matching too - the point of the memory cache
+	}
+
+	// The field must still hold the exact values that were bound (guards
+	// against reuse/overwrite between the store and the draw).
+	if ((e->sx != (s16)((const VERTTYPE *)v)[0]) || (e->sy != (s16)((const VERTTYPE *)v)[1]))
+	{
+		return 0;
+	}
+
+	*w = e->w;
+	return 1;
+}
+
+void Pgxp_ClearCache(void)
+{
+	// Every table, so a toggle or a state load cannot let a pre-existing
+	// association satisfy a lookup.
+	memset(s_pgxpCache, 0, sizeof(s_pgxpCache));
+	memset(s_pgxpShadow, 0, sizeof(s_pgxpShadow));
+	memset(s_pgxpTransform, 0, sizeof(s_pgxpTransform));
+	s_pgxpPackedSrc = 0;
+	s_pgxpPackedSrcValue = 0;
+}
+
+void Pgxp_AdvanceEpoch(void)
+{
+	s_pgxpEpoch++;
+}
+
+// Called from the GTE perspective transform with the unclamped view depth (w,
+// in SZ units). The integer registers are the PSX
+// result; this is only the side channel.
+void Pgxp_PushVertex(int sx, int sy, float w, int szLow)
+{
+	// w is the view-space depth and must stay positive for the renderer's
+	// perspective divide.
+	if (w <= 0.0f)
+	{
+		return;
+	}
+
+	PgxpCachedVertex *set = &s_pgxpCache[(Pgxp_CoordHash((s16)sx, (s16)sy) & (PGXP_CACHE_SETS - 1)) * PGXP_CACHE_WAYS];
+
+	// 4-way set associative: update the same-pixel entry in place if present,
+	// else take a free slot, else evict the oldest.
+	PgxpCachedVertex *v = NULL;
+	PgxpCachedVertex *oldest = &set[0];
+
+	for (int way = 0; way < PGXP_CACHE_WAYS; way++)
+	{
+		PgxpCachedVertex *c = &set[way];
+
+		if ((c->valid != 0) && (c->sx == (s16)sx) && (c->sy == (s16)sy))
+		{
+			v = c;
+			break;
+		}
+
+		if ((v == NULL) && (c->valid == 0))
+		{
+			v = c;
+		}
+
+		if (c->gen < oldest->gen)
+		{
+			oldest = c;
+		}
+	}
+
+	if (v == NULL)
+	{
+		v = oldest;
+	}
+
+	// True ambiguity = the same pixel, same frame, with a different depth: two
+	// different objects projecting to the same point.
+	const u8 samePixelThisEpoch = ((v->valid != 0) && (v->gen == s_pgxpEpoch) && (v->sx == (s16)sx) && (v->sy == (s16)sy)) ? 1 : 0;
+	float wDelta = v->w - w;
+	if (wDelta < 0.0f) { wDelta = -wDelta; }
+
+	v->contested = (samePixelThisEpoch && (wDelta > 0.25f)) ? 1 : 0;
+	v->sx = (s16)sx;
+	v->sy = (s16)sy;
+	v->valid = 1;
+	v->gen = s_pgxpEpoch;
+	v->seq = ++s_pgxpPushSeq;
+	v->szLow = (u16)szLow;
+	v->w = w;
+}
+
+// Coordinate fallback: EXACT match only (a +-1px tolerance matched unrelated
+// geometry in the dense pool and smeared textures). Returns 1 on a hit (fills
+// *w), 0 on a miss, 3 on an ambiguous pixel and 4 on a stale entry.
+internal int Pgxp_LookupVertex(int x, int y, float *w)
+{
+	const PgxpCachedVertex *set = &s_pgxpCache[(Pgxp_CoordHash((s16)x, (s16)y) & (PGXP_CACHE_SETS - 1)) * PGXP_CACHE_WAYS];
+	int refusal = 0;
+
+	for (int way = 0; way < PGXP_CACHE_WAYS; way++)
+	{
+		const PgxpCachedVertex *v = &set[way];
+
+		if ((v->valid == 0) || (v->sx != (s16)x) || (v->sy != (s16)y))
+		{
+			continue;
+		}
+
+		if (v->contested != 0)
+		{
+			if (refusal == 0)
+			{
+				refusal = 3; // ambiguous pixel: two objects wanted it this frame
+			}
+			continue;
+		}
+
+		if ((s_pgxpEpoch - v->gen) > PGXP_FRESH_WINDOW)
+		{
+			if (refusal == 0)
+			{
+				refusal = 4; // an object long gone from this pixel
+			}
+			continue;
+		}
+
+		*w = v->w;
+		return 1;
+	}
+
+	return refusal;
+}
+
+internal void Pgxp_Mark2D(int base, int count)
+{
+	if ((base < 0) || ((base + count) > MAX_VERTEX_BUFFER_SIZE))
+	{
+		return;
+	}
+
+	for (int i = 0; i < count; i++)
+	{
+		s_pgxpVertexData[base + i] = 0.0f;
+	}
+}
+
+// Fills one vertex: its view depth, or 0 (affine) when nothing trustworthy binds.
+internal void Pgxp_FillVertex(int index, VERTTYPE *p)
+{
+	float w = 0.0f;
+
+	// Address-keyed provenance first: exact, no coordinate matching involved.
+	// A proven non-transform field (-1) stays affine and blocks the fallback.
+	if (Pgxp_LookupShadow(p, &w) == 0)
+	{
+		if (Pgxp_LookupVertex(p[0], p[1], &w) != 1)
+		{
+			w = 0.0f;
+		}
+	}
+
+	s_pgxpVertexData[index] = w;
+}
+
+internal void Pgxp_CopyVertex(int dstIndex, int srcIndex)
+{
+	s_pgxpVertexData[dstIndex] = s_pgxpVertexData[srcIndex];
+}
+
+// Consistency rule: a triangle must be corrected for ALL of its vertices or
+// none. Mixing perspective and affine interpolation inside one triangle tears
+// the texture apart.
+internal void Pgxp_RequireConsistent(int base, int count)
+{
+	for (int i = 0; i < count; i++)
+	{
+		if (s_pgxpVertexData[base + i] == 0.0f)
+		{
+			Pgxp_Mark2D(base, count);
+			return;
+		}
+	}
+}
+
+// Resolve a primitive's vertices (all affine when PGXP is off).
+internal void Pgxp_FillPrimitive(int base, VERTTYPE **p, int count)
+{
+	if (!NativeGpu_PgxpEnabled())
+	{
+		Pgxp_Mark2D(base, count);
+		return;
+	}
+
+	for (int i = 0; i < count; i++)
+	{
+		Pgxp_FillVertex(base + i, p[i]);
+	}
+
+	Pgxp_RequireConsistent(base, count);
+}
+
 void ClearSplits(void)
 {
 	s_gpu.currentSplitDebugText = NULL;
@@ -138,6 +647,10 @@ void ClearSplits(void)
 	s_gpu.splits[0].psxTextureOutputSTP = false;
 	s_gpu.splits[0].psxDrawMaskSet = false;
 	s_gpu.framebufferFeedbackRunActive = false;
+
+	// Frame boundary for PGXP matching: all lookups of this frame happened
+	// before this point (draw-time parsing), next frame's pushes come after.
+	Pgxp_AdvanceEpoch();
 }
 
 int NativeGpu_GetStateSize(void)
@@ -265,6 +778,7 @@ void MakeLineArray(GrVertex *vertex, VERTTYPE *p0, VERTTYPE *p1)
 	DrawEnvOffset(&ofsX, &ofsY);
 
 	memset(vertex, 0, sizeof(GrVertex) * 4);
+	Pgxp_Mark2D((int)(vertex - s_gpu.vertexBuffer), 4);
 
 	if (dx > abs((s16)dy))
 	{ // horizontal
@@ -373,6 +887,11 @@ void MakeVertexTriangle(GrVertex *vertex, VERTTYPE *p0, VERTTYPE *p1, VERTTYPE *
 
 	memset(vertex, 0, sizeof(GrVertex) * 3);
 
+	{
+		VERTTYPE *pgxpSrc[3] = {p0, p1, p2};
+		Pgxp_FillPrimitive(s_gpu.vertexIndex, pgxpSrc, 3);
+	}
+
 	vertex[0].x = p0[0] + ofsX;
 	vertex[0].y = p0[1] + ofsY;
 
@@ -397,6 +916,19 @@ void MakeVertexQuad(GrVertex *vertex, VERTTYPE *p0, VERTTYPE *p1, VERTTYPE *p2, 
 
 	memset(vertex, 0, sizeof(GrVertex) * 4);
 
+	// A screen-aligned integer quad (PSX order TL, TR, BR, BL) is a sprite/UI
+	// element in practice and never came from a GTE projection: keep it affine
+	// instead of risking an exact-coordinate match with an unrelated 3D vertex.
+	if ((p0[0] == p3[0]) && (p1[0] == p2[0]) && (p0[1] == p1[1]) && (p2[1] == p3[1]))
+	{
+		Pgxp_Mark2D(s_gpu.vertexIndex, 4);
+	}
+	else
+	{
+		VERTTYPE *pgxpSrc[4] = {p0, p1, p2, p3};
+		Pgxp_FillPrimitive(s_gpu.vertexIndex, pgxpSrc, 4);
+	}
+
 	vertex[0].x = p0[0] + ofsX;
 	vertex[0].y = p0[1] + ofsY;
 
@@ -420,6 +952,11 @@ void MakeVertexRect(GrVertex *vertex, VERTTYPE *p0, s16 w, s16 h)
 	DrawEnvOffset(&ofsX, &ofsY);
 
 	memset(vertex, 0, sizeof(GrVertex) * 4);
+
+	// Rects (TILE/SPRT) are 2D elements: never eligible. Without this, stale
+	// depth left in the rolling side-channel buffer by an earlier 3D primitive
+	// would leak into HUD sprites. TriangulateQuad copies the slots.
+	Pgxp_Mark2D((int)(vertex - s_gpu.vertexBuffer), 4);
 
 	vertex[0].x = p0[0] + ofsX;
 	vertex[0].y = p0[1] + ofsY;
@@ -812,6 +1349,11 @@ void TriangulateQuad()
 	s_gpu.vertexBuffer[s_gpu.vertexIndex + 5] = s_gpu.vertexBuffer[s_gpu.vertexIndex + 2];
 	s_gpu.vertexBuffer[s_gpu.vertexIndex + 2] = s_gpu.vertexBuffer[s_gpu.vertexIndex + 3];
 	s_gpu.vertexBuffer[s_gpu.vertexIndex + 3] = s_gpu.vertexBuffer[s_gpu.vertexIndex + 1];
+
+	Pgxp_CopyVertex(s_gpu.vertexIndex + 4, s_gpu.vertexIndex + 3);
+	Pgxp_CopyVertex(s_gpu.vertexIndex + 5, s_gpu.vertexIndex + 2);
+	Pgxp_CopyVertex(s_gpu.vertexIndex + 2, s_gpu.vertexIndex + 3);
+	Pgxp_CopyVertex(s_gpu.vertexIndex + 3, s_gpu.vertexIndex + 1);
 }
 
 //------------------------------------------------------------------------------------------------------------------------
@@ -1041,7 +1583,7 @@ void DrawAllSplits()
 #endif
 
 	// next code ideally should be called before EndScene
-	NativeRenderer_UpdateVertexBuffer(s_gpu.vertexBuffer, s_gpu.vertexIndex);
+	NativeRenderer_UpdateVertexBuffer(s_gpu.vertexBuffer, s_gpu.vertexIndex, s_pgxpVertexData);
 
 	for (int i = 1; i <= s_gpu.splitIndex; i++)
 	{

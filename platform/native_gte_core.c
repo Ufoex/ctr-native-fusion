@@ -8,6 +8,9 @@
 #include <psx/gtereg.h>
 #include <psx/libgte.h>
 
+int NativeGpu_PgxpEnabled(void);
+void Pgxp_PushVertex(int sx, int sy, float w, int szLow);
+
 GTERegisters gteRegs;
 
 #define GTE_SF(op)    ((op >> 19) & 1)
@@ -318,6 +321,21 @@ internal int GTE_RotTransPers(int idx, int lm)
 	C2_SXY1 = C2_SXY2;
 	C2_SX2 = Lm_G1(F((s64)C2_OFX + ((s64)C2_IR1 * h_over_sz3)) >> 16);
 	C2_SY2 = Lm_G2(F((s64)C2_OFY + ((s64)C2_IR2 * h_over_sz3)) >> 16);
+
+	// PGXP side channel (textures only): publish the view depth of this vertex.
+	// The registers above stay PSX-exact; the renderer matches the depth back by
+	// the exact (SX2, SY2, SZ3) the game copies into its primitive. The depth is
+	// in SZ units (mac3 / 4096) and floors at H/2 like the hardware divide's
+	// saturation, so vertices at or behind the eye still get a usable value.
+	// (idx >= 3 reads IR, which was just overwritten above: not published.)
+	if ((idx < 3) && NativeGpu_PgxpEnabled())
+	{
+		const double h = (double)C2_H;
+		const double zv = ((double)((s64)C2_TRZ << 12) + (double)C2_R31 * (double)VX(idx) + (double)C2_R32 * (double)VY(idx) +
+		                   (double)C2_R33 * (double)VZ(idx)) / 4096.0;
+
+		Pgxp_PushVertex(C2_SX2, C2_SY2, (float)((zv < (h * 0.5)) ? (h * 0.5) : zv), (int)(u16)C2_SZ3);
+	}
 
 	return h_over_sz3;
 }

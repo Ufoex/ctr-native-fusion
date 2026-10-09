@@ -3488,6 +3488,16 @@ static int RenderBucket_SplitPrimitiveWriterSupported(struct RenderBucketDrawCon
 	       (prim == RB_RETAIL_INST_PRIM_GHOST);
 }
 
+// PGXP textures: the prim fields just received GTE output; bind each by address
+// to its transform (SZ is the vertex's raw depth register, 0 = unknown).
+static void RenderBucket_PgxpNoteTri(const s16 *x0, const s16 *x1, const s16 *x2, const struct RenderBucketSplitVertex *v0,
+                                     const struct RenderBucketSplitVertex *v1, const struct RenderBucketSplitVertex *v2)
+{
+	Pgxp_NoteSxyStore(x0, v0->sxy, (v0->sz != 0) ? (int)(u16)v0->sz : -1);
+	Pgxp_NoteSxyStore(x1, v1->sxy, (v1->sz != 0) ? (int)(u16)v1->sz : -1);
+	Pgxp_NoteSxyStore(x2, v2->sxy, (v2->sz != 0) ? (int)(u16)v2->sz : -1);
+}
+
 static int RenderBucket_DrawSplitPrimitiveNormalAtOTEntry(struct RenderBucketDrawContext *ctx, u32 command, struct TextureLayout *tex, uint32_t *otEntry,
                                                           const struct RenderBucketSplitVertex *v0, const struct RenderBucketSplitVertex *v1,
                                                           const struct RenderBucketSplitVertex *v2)
@@ -3518,6 +3528,7 @@ static int RenderBucket_DrawSplitPrimitiveNormalAtOTEntry(struct RenderBucketDra
 		p->y1 = (s16)(v1->sxy >> 16);
 		p->x2 = (s16)v2->sxy;
 		p->y2 = (s16)(v2->sxy >> 16);
+		RenderBucket_PgxpNoteTri(&p->x0, &p->x1, &p->x2, v0, v1, v2);
 		RenderBucket_LinkPrimRaw(otEntry, p, 0x06000000);
 		ctx->primMem->cursor = (char *)p + 0x1c;
 	}
@@ -3542,6 +3553,7 @@ static int RenderBucket_DrawSplitPrimitiveNormalAtOTEntry(struct RenderBucketDra
 		p->tpage = tex->tpage;
 		p->x2 = (s16)v2->sxy;
 		p->y2 = (s16)(v2->sxy >> 16);
+		RenderBucket_PgxpNoteTri(&p->x0, &p->x1, &p->x2, v0, v1, v2);
 		p->u2 = (u8)v2->uv;
 		p->v2 = (u8)(v2->uv >> 8);
 		RenderBucket_LinkPrimRaw(otEntry, p, 0x09000000);
@@ -3633,6 +3645,7 @@ static void RenderBucket_WriteSplitFT3(POLY_FT3 *p, const struct RenderBucketSpl
 	CtrGpu_WritePackedUVWord(&p->u1, texWord1);
 	p->x2 = (s16)v2->sxy;
 	p->y2 = (s16)(v2->sxy >> 16);
+	RenderBucket_PgxpNoteTri(&p->x0, &p->x1, &p->x2, v0, v1, v2);
 	CtrGpu_WritePackedUVWord(&p->u2, texWord2);
 }
 
@@ -3690,6 +3703,7 @@ static int RenderBucket_DrawSplitPrimitiveDepthFadeAtRange(struct RenderBucketDr
 	p->tpage = tex->tpage;
 	p->x2 = (s16)v2->sxy;
 	p->y2 = (s16)(v2->sxy >> 16);
+	RenderBucket_PgxpNoteTri(&p->x0, &p->x1, &p->x2, v0, v1, v2);
 	p->u2 = (u8)v2->uv;
 	p->v2 = (u8)(v2->uv >> 8);
 	RenderBucket_LinkPrimRaw(otEntry, p, 0x09000000);

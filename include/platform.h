@@ -28,6 +28,15 @@ void Platform_PinVRAMDisplayRect(int x, int y, int w, int h, int frameCount);
 int Platform_GetVBlankCount(void);
 void Platform_WaitUntilVBlank(int targetVBlank);
 void Platform_PollHostEvents(void);
+
+// PGXP textures: bind a prim field that just received raw GTE output (packed
+// SXY) to the transform's view depth, keyed by its address. Called by the
+// RenderBucket prim writers; see platform/native_gpu.c. No-ops while the
+// pgxp_textures option is off.
+void Pgxp_NoteSxyStore(const void *addrField, unsigned int packedSxy, int szLow);
+void Pgxp_NotePrimWrite(void *dstField, const void *srcField, unsigned int packed, int szLow);
+void Pgxp_NoteTransformCopy(void *dstField, const void *srcField);
+void Pgxp_SetPackedSource(const void *field, unsigned int packed);
 int Platform_PollInput(void);
 void Platform_InputAcknowledgeRetailPoll(void);
 int Platform_StartDisplayLoop(void (*callback)(void *), void *userdata);

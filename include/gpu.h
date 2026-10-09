@@ -61,10 +61,16 @@ force_inline void CtrGpu_WriteColorCode(uint8_t *r, u32 colorCode)
 	r[3] = (uint8_t)(colorCode >> 24);
 }
 
+// PGXP textures: binds a prim field by ADDRESS when the caller just packed a
+// projected vertex (the DrawLevel packer sets the source); a value that does
+// not match is not transform-sourced and gets a negative binding.
+void Pgxp_NotePrimWriteSticky(void *dstField, unsigned int packedXY);
+
 force_inline void CtrGpu_WritePackedXY(VERTTYPE *x, u32 xy)
 {
 	x[0] = (VERTTYPE)xy;
 	x[1] = (VERTTYPE)(xy >> 16);
+	Pgxp_NotePrimWriteSticky((void *)x, xy);
 }
 
 force_inline void CtrGpu_WritePackedUV(uint8_t *u, u16 uv)
