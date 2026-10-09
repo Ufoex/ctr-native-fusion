@@ -108,19 +108,25 @@ static inline void CTR_GteLoadLVL(const s32 *v)
 	MTC2((u32)v[2], 11);
 }
 
+// PGXP textures: binds the destination field to the transform that produced it.
+void Pgxp_NoteTransformStore(void *field, unsigned int packed, int szLow);
+
 static inline void CTR_GteStoreSXY(void *xy)
 {
 	CTR_GteStoreU32(xy, MFC2(14));
+	Pgxp_NoteTransformStore(xy, MFC2(14), MFC2(19)); // SXY2 pairs SZ3
 }
 
 static inline void CTR_GteStoreSXY0(void *xy)
 {
 	CTR_GteStoreU32(xy, MFC2(12));
+	Pgxp_NoteTransformStore(xy, MFC2(12), MFC2(17)); // SXY0 pairs SZ1
 }
 
 static inline void CTR_GteStoreSXY1(void *xy)
 {
 	CTR_GteStoreU32(xy, MFC2(13));
+	Pgxp_NoteTransformStore(xy, MFC2(13), MFC2(18)); // SXY1 pairs SZ2
 }
 
 static inline void CTR_GteStoreSXY2(void *xy)
@@ -133,6 +139,9 @@ static inline void CTR_GteStoreSXY3(void *xy0, void *xy1, void *xy2)
 	CTR_GteStoreU32(xy0, MFC2(12));
 	CTR_GteStoreU32(xy1, MFC2(13));
 	CTR_GteStoreU32(xy2, MFC2(14));
+	Pgxp_NoteTransformStore(xy0, MFC2(12), MFC2(17));
+	Pgxp_NoteTransformStore(xy1, MFC2(13), MFC2(18));
+	Pgxp_NoteTransformStore(xy2, MFC2(14), MFC2(19));
 }
 
 static inline s32 CTR_GteReadMAC1(void)
