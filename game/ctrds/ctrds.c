@@ -82,6 +82,7 @@ struct CtrdsLayout g_ctrds = {
     .touchControls = 0,
     .skipAv = 0,
     .primReject = 1,
+    .pgxpTextures = 0,
     .hdArt = 1,
     .hdLog = 0,
     .hdDump = 0,
@@ -366,6 +367,7 @@ void Ctrds_SaveConfig(void)
 	fprintf(f, "fxaa=%d\n", g_ctrds.fxaa);
 	fprintf(f, "crt=%d\n", g_ctrds.crt);
 	fprintf(f, "dither=%d\n", g_ctrds.dither);
+	fprintf(f, "pgxp_textures=%d\n", g_ctrds.pgxpTextures);
 	fprintf(f, "aspect_mode=%d\n", g_ctrds.aspectMode);
 	fprintf(f, "aspect_w=%d\n", g_ctrds.aspectW);
 	fprintf(f, "aspect_h=%d\n", g_ctrds.aspectH);
@@ -1261,6 +1263,8 @@ void Ctrds_LoadConfig(void)
 			fprintf(f, "skip_av=%d\n", g_ctrds.skipAv);
 			fprintf(f, "# prim_reject: drop primitives too large for the PSX GPU (0 off, 1 on, 2 on+log)\n");
 			fprintf(f, "prim_reject=%d\n", g_ctrds.primReject);
+			fprintf(f, "# pgxp_textures: EXPERIMENTAL perspective-correct textures on 3D geometry (0/1)\n");
+			fprintf(f, "pgxp_textures=%d\n", g_ctrds.pgxpTextures);
 			fprintf(f, "# hd_art: use the upscaled art in hd/ instead of the original sprites\n");
 			fprintf(f, "hd_art=%d\n", g_ctrds.hdArt);
 			fprintf(f, "# hd_log: report each HUD icon index as it is drawn, to author hd/ art\n");
@@ -1394,6 +1398,10 @@ void Ctrds_LoadConfig(void)
 		else if (strncmp(line, "prim_reject", 11) == 0)
 		{
 			g_ctrds.primReject = value;
+		}
+		else if (strncmp(line, "pgxp_textures", 13) == 0)
+		{
+			g_ctrds.pgxpTextures = value;
 		}
 		else if (strncmp(line, "hd_art", 6) == 0)
 		{

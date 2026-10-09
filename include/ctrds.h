@@ -228,6 +228,11 @@ struct CtrdsLayout
 
 	int primReject;
 
+	// Experimental. Perspective-correct texture mapping on 3D geometry (PGXP
+	// textures only; vertex positions stay PSX-exact). Off by default; not
+	// available on Android, whose GLSL ES 3.0 has no noperspective qualifier.
+	int pgxpTextures;
+
 	int hdArt;
 
 	int hdLog;
