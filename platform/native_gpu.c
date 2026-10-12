@@ -221,7 +221,35 @@ internal struct
 {
 	u32 vtxAddr, vtxCoord, vtxNonXform, vtxMiss;
 	u32 primOk, primDemoted, prim2D;
+	// Per polygon kind (PGXP_KIND_*): primitives seen / left affine.
+	u32 kindPrims[8], kindDemoted[8];
+	// Why an unbound vertex missed, textured primitives only (PGXP_MISS_*).
+	u32 missWhy[4];
 } s_pgxpStats;
+
+// Order matches the eight MakeVertex* call sites in ProcessFlatPoly / ProcessGouraudPoly.
+enum
+{
+	PGXP_KIND_F3,
+	PGXP_KIND_FT3,
+	PGXP_KIND_F4,
+	PGXP_KIND_FT4,
+	PGXP_KIND_G3,
+	PGXP_KIND_GT3,
+	PGXP_KIND_G4,
+	PGXP_KIND_GT4,
+};
+
+enum
+{
+	PGXP_MISS_NO_HOOK,     // no writer ever bound this field and no pixel match: unhooked code path
+	PGXP_MISS_OVERWRITTEN, // bound once, but the field changed before the draw
+	PGXP_MISS_CONTESTED,   // coordinate fallback refused: two objects shared the pixel
+	PGXP_MISS_STALE,       // coordinate fallback refused: only an old frame had that pixel
+};
+
+internal int s_pgxpKind = PGXP_KIND_F3;
+internal int s_pgxpShadowOverwritten = 0; // set by Pgxp_LookupShadow when it returns 0 for a changed field
 
 int NativeGpu_PgxpEnabled(void)
 {
@@ -453,6 +481,7 @@ internal int Pgxp_LookupShadow(const void *v, float *w)
 	// against reuse/overwrite between the store and the draw).
 	if ((e->sx != (s16)((const VERTTYPE *)v)[0]) || (e->sy != (s16)((const VERTTYPE *)v)[1]))
 	{
+		s_pgxpShadowOverwritten = 1;
 		return 0;
 	}
 
@@ -610,6 +639,7 @@ internal void Pgxp_FillVertex(int index, VERTTYPE *p)
 
 	// Address-keyed provenance first: exact, no coordinate matching involved.
 	// A proven non-transform field (-1) stays affine and blocks the fallback.
+	s_pgxpShadowOverwritten = 0;
 	const int shadow = Pgxp_LookupShadow(p, &w);
 
 	if (shadow == 1)
@@ -620,14 +650,26 @@ internal void Pgxp_FillVertex(int index, VERTTYPE *p)
 	{
 		s_pgxpStats.vtxNonXform++;
 	}
-	else if (Pgxp_LookupVertex(p[0], p[1], &w) == 1)
-	{
-		s_pgxpStats.vtxCoord++;
-	}
 	else
 	{
-		w = 0.0f;
-		s_pgxpStats.vtxMiss++;
+		const int coord = Pgxp_LookupVertex(p[0], p[1], &w);
+
+		if (coord == 1)
+		{
+			s_pgxpStats.vtxCoord++;
+		}
+		else
+		{
+			w = 0.0f;
+			s_pgxpStats.vtxMiss++;
+
+			if ((s_pgxpKind & 1) != 0) // odd kinds are the textured ones
+			{
+				const int why = (coord == 3) ? PGXP_MISS_CONTESTED : (coord == 4) ? PGXP_MISS_STALE : s_pgxpShadowOverwritten ? PGXP_MISS_OVERWRITTEN : PGXP_MISS_NO_HOOK;
+
+				s_pgxpStats.missWhy[why]++;
+			}
+		}
 	}
 
 	s_pgxpVertexData[index] = w;
@@ -649,11 +691,14 @@ internal void Pgxp_RequireConsistent(int base, int count)
 		{
 			Pgxp_Mark2D(base, count);
 			s_pgxpStats.primDemoted++;
+			s_pgxpStats.kindPrims[s_pgxpKind]++;
+			s_pgxpStats.kindDemoted[s_pgxpKind]++;
 			return;
 		}
 	}
 
 	s_pgxpStats.primOk++;
+	s_pgxpStats.kindPrims[s_pgxpKind]++;
 }
 
 // Resolve a primitive's vertices (all affine when PGXP is off).
@@ -693,6 +738,26 @@ void ClearSplits(void)
 		                 (unsigned)PGXP_STATS_EPOCHS, prims, s_pgxpStats.prim2D, eligible, s_pgxpStats.primOk,
 		                 eligible ? (100.0 * s_pgxpStats.primOk / eligible) : 0.0, s_pgxpStats.primDemoted, s_pgxpStats.vtxAddr, s_pgxpStats.vtxCoord,
 		                 s_pgxpStats.vtxNonXform, s_pgxpStats.vtxMiss);
+		u32 texPrims = 0, texDemoted = 0, flatDemoted = 0;
+
+		for (int k = 0; k < 8; k++)
+		{
+			if ((k & 1) != 0)
+			{
+				texPrims += s_pgxpStats.kindPrims[k];
+				texDemoted += s_pgxpStats.kindDemoted[k];
+			}
+			else
+			{
+				flatDemoted += s_pgxpStats.kindDemoted[k];
+			}
+		}
+
+		Platform_LogWarn("[CTR PGXP]   textured: prims=%u affine=%u (%.1f%%) [FT3=%u/%u GT3=%u/%u FT4=%u/%u GT4=%u/%u] | untextured affine=%u | textured vertex misses: no-hook=%u overwritten=%u contested=%u stale=%u\n",
+		                 texPrims, texDemoted, texPrims ? (100.0 * texDemoted / texPrims) : 0.0, s_pgxpStats.kindDemoted[1], s_pgxpStats.kindPrims[1],
+		                 s_pgxpStats.kindDemoted[5], s_pgxpStats.kindPrims[5], s_pgxpStats.kindDemoted[3], s_pgxpStats.kindPrims[3], s_pgxpStats.kindDemoted[7],
+		                 s_pgxpStats.kindPrims[7], flatDemoted, s_pgxpStats.missWhy[PGXP_MISS_NO_HOOK], s_pgxpStats.missWhy[PGXP_MISS_OVERWRITTEN],
+		                 s_pgxpStats.missWhy[PGXP_MISS_CONTESTED], s_pgxpStats.missWhy[PGXP_MISS_STALE]);
 		memset(&s_pgxpStats, 0, sizeof(s_pgxpStats));
 	}
 
@@ -2039,6 +2104,7 @@ internal int ProcessFlatPoly(P_TAG *polyTag)
 		AddSplit(semiTrans, false, false);
 
 		GrVertex *firstVertex = &s_gpu.vertexBuffer[s_gpu.vertexIndex];
+		s_pgxpKind = PGXP_KIND_F3;
 		MakeVertexTriangle(firstVertex, &poly->x0, &poly->x1, &poly->x2);
 		MakeTexcoordTriangleZero(firstVertex, 0);
 		MakeColourTriangle(firstVertex, shadeTexOn, &poly->r0, &poly->r0, &poly->r0);
@@ -2058,6 +2124,7 @@ internal int ProcessFlatPoly(P_TAG *polyTag)
 			AddSplit(semiTrans, true, NativeGpu_TPageOverlapsActiveDrawPage(poly->tpage));
 
 			GrVertex *firstVertex = &s_gpu.vertexBuffer[s_gpu.vertexIndex];
+			s_pgxpKind = PGXP_KIND_FT3;
 			MakeVertexTriangle(firstVertex, &poly->x0, &poly->x1, &poly->x2);
 			MakeTexcoordTriangle(firstVertex, &poly->u0, &poly->u1, &poly->u2, poly->tpage, poly->clut,
 			                     GET_TPAGE_DITHER(activeDrawEnv.tpage) || activeDrawEnv.dtd);
@@ -2074,6 +2141,7 @@ internal int ProcessFlatPoly(P_TAG *polyTag)
 		AddSplit(semiTrans, false, false);
 
 		GrVertex *firstVertex = &s_gpu.vertexBuffer[s_gpu.vertexIndex];
+		s_pgxpKind = PGXP_KIND_F4;
 		MakeVertexQuad(firstVertex, &poly->x0, &poly->x1, &poly->x3, &poly->x2);
 		MakeTexcoordQuadZero(firstVertex, 0);
 		MakeColourQuad(firstVertex, shadeTexOn, &poly->r0, &poly->r0, &poly->r0, &poly->r0);
@@ -2091,6 +2159,7 @@ internal int ProcessFlatPoly(P_TAG *polyTag)
 		AddSplit(semiTrans, true, NativeGpu_TPageOverlapsActiveDrawPage(poly->tpage));
 
 		GrVertex *firstVertex = &s_gpu.vertexBuffer[s_gpu.vertexIndex];
+		s_pgxpKind = PGXP_KIND_FT4;
 		MakeVertexQuad(firstVertex, &poly->x0, &poly->x1, &poly->x3, &poly->x2);
 		MakeTexcoordQuad(firstVertex, &poly->u0, &poly->u1, &poly->u3, &poly->u2, poly->tpage, poly->clut,
 		                 GET_TPAGE_DITHER(activeDrawEnv.tpage) || activeDrawEnv.dtd);
@@ -2121,6 +2190,7 @@ internal int ProcessGouraudPoly(P_TAG *polyTag)
 		AddSplit(semiTrans, false, false);
 
 		GrVertex *firstVertex = &s_gpu.vertexBuffer[s_gpu.vertexIndex];
+		s_pgxpKind = PGXP_KIND_G3;
 		MakeVertexTriangle(firstVertex, &poly->x0, &poly->x1, &poly->x2);
 		MakeTexcoordTriangleZero(firstVertex, 1);
 		MakeColourTriangle(firstVertex, shadeTexOn, &poly->r0, &poly->r1, &poly->r2);
@@ -2137,6 +2207,7 @@ internal int ProcessGouraudPoly(P_TAG *polyTag)
 		AddSplit(semiTrans, true, NativeGpu_TPageOverlapsActiveDrawPage(poly->tpage));
 
 		GrVertex *firstVertex = &s_gpu.vertexBuffer[s_gpu.vertexIndex];
+		s_pgxpKind = PGXP_KIND_GT3;
 		MakeVertexTriangle(firstVertex, &poly->x0, &poly->x1, &poly->x2);
 		MakeTexcoordTriangle(firstVertex, &poly->u0, &poly->u1, &poly->u2, poly->tpage, poly->clut, GET_TPAGE_DITHER(activeDrawEnv.tpage) || activeDrawEnv.dtd);
 		MakeColourTriangle(firstVertex, shadeTexOn, &poly->r0, &poly->r1, &poly->r2);
@@ -2152,6 +2223,7 @@ internal int ProcessGouraudPoly(P_TAG *polyTag)
 		AddSplit(semiTrans, false, false);
 
 		GrVertex *firstVertex = &s_gpu.vertexBuffer[s_gpu.vertexIndex];
+		s_pgxpKind = PGXP_KIND_G4;
 		MakeVertexQuad(firstVertex, &poly->x0, &poly->x1, &poly->x3, &poly->x2);
 		MakeTexcoordQuadZero(firstVertex, 1);
 		MakeColourQuad(firstVertex, shadeTexOn, &poly->r0, &poly->r1, &poly->r3, &poly->r2);
@@ -2170,6 +2242,7 @@ internal int ProcessGouraudPoly(P_TAG *polyTag)
 		AddSplit(semiTrans, true, NativeGpu_TPageOverlapsActiveDrawPage(poly->tpage));
 
 		GrVertex *firstVertex = &s_gpu.vertexBuffer[s_gpu.vertexIndex];
+		s_pgxpKind = PGXP_KIND_GT4;
 		MakeVertexQuad(firstVertex, &poly->x0, &poly->x1, &poly->x3, &poly->x2);
 		MakeTexcoordQuad(firstVertex, &poly->u0, &poly->u1, &poly->u3, &poly->u2, poly->tpage, poly->clut,
 		                 GET_TPAGE_DITHER(activeDrawEnv.tpage) || activeDrawEnv.dtd);
