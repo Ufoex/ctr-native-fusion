@@ -173,6 +173,7 @@ typedef struct
 // transforms whole frames of vertices before the draw pass, so the
 // transform->store distance routinely exceeds a frame of pushes.
 // (sx, sy, SZ) uniqueness carries specificity; the era check only rejects old entries.
+#define PGXP_SAMPLE_COUNT (24) // demoted GT3s listed once per run
 #define PGXP_STATS_EPOCHS (120) // log coverage every this many frames
 #define PGXP_BIND_EPOCHS (8)    // ~4 frames for the SZ-matched path
 #define PGXP_XY_BIND_EPOCHS (2) // coordinate-only fallback: same frame only
@@ -225,6 +226,8 @@ internal struct
 	u32 kindPrims[8], kindDemoted[8];
 	// Why an unbound vertex missed, textured primitives only (PGXP_MISS_*).
 	u32 missWhy[4];
+	// Same textured misses, split by what the address table said (before any coordinate match).
+	u32 missShadowNone, missShadowOverwritten;
 } s_pgxpStats;
 
 // Order matches the eight MakeVertex* call sites in ProcessFlatPoly / ProcessGouraudPoly.
@@ -633,9 +636,13 @@ internal void Pgxp_Mark2DPrim(int base, int count)
 }
 
 // Fills one vertex: its view depth, or 0 (affine) when nothing trustworthy binds.
-internal void Pgxp_FillVertex(int index, VERTTYPE *p)
+// Returns a one-letter status for the sample log: A address-bound, X proven
+// non-transform, C coordinate-bound, N no table entry, O entry overwritten,
+// K contested, S stale (the last four are misses).
+internal char Pgxp_FillVertex(int index, VERTTYPE *p)
 {
 	float w = 0.0f;
+	char status = 'A';
 
 	// Address-keyed provenance first: exact, no coordinate matching involved.
 	// A proven non-transform field (-1) stays affine and blocks the fallback.
@@ -649,6 +656,7 @@ internal void Pgxp_FillVertex(int index, VERTTYPE *p)
 	else if (shadow < 0)
 	{
 		s_pgxpStats.vtxNonXform++;
+		status = 'X';
 	}
 	else
 	{
@@ -657,22 +665,34 @@ internal void Pgxp_FillVertex(int index, VERTTYPE *p)
 		if (coord == 1)
 		{
 			s_pgxpStats.vtxCoord++;
+			status = 'C';
 		}
 		else
 		{
 			w = 0.0f;
 			s_pgxpStats.vtxMiss++;
+			status = (coord == 3) ? 'K' : (coord == 4) ? 'S' : s_pgxpShadowOverwritten ? 'O' : 'N';
 
 			if ((s_pgxpKind & 1) != 0) // odd kinds are the textured ones
 			{
 				const int why = (coord == 3) ? PGXP_MISS_CONTESTED : (coord == 4) ? PGXP_MISS_STALE : s_pgxpShadowOverwritten ? PGXP_MISS_OVERWRITTEN : PGXP_MISS_NO_HOOK;
 
 				s_pgxpStats.missWhy[why]++;
+
+				if (s_pgxpShadowOverwritten)
+				{
+					s_pgxpStats.missShadowOverwritten++;
+				}
+				else
+				{
+					s_pgxpStats.missShadowNone++;
+				}
 			}
 		}
 	}
 
 	s_pgxpVertexData[index] = w;
+	return status;
 }
 
 internal void Pgxp_CopyVertex(int dstIndex, int srcIndex)
@@ -710,12 +730,28 @@ internal void Pgxp_FillPrimitive(int base, VERTTYPE **p, int count)
 		return;
 	}
 
+	char status[4];
+	const u32 demotedBefore = s_pgxpStats.primDemoted;
+
 	for (int i = 0; i < count; i++)
 	{
-		Pgxp_FillVertex(base + i, p[i]);
+		status[i] = Pgxp_FillVertex(base + i, p[i]);
 	}
 
 	Pgxp_RequireConsistent(base, count);
+
+	// First few affine-demoted GT3s of the run: where they live and why each vertex missed.
+	if ((s_pgxpStats.primDemoted != demotedBefore) && (s_pgxpKind == PGXP_KIND_GT3))
+	{
+		local_persist int sampled = 0;
+
+		if (sampled < PGXP_SAMPLE_COUNT)
+		{
+			sampled++;
+			Platform_LogWarn("[CTR PGXP] sample GT3 #%d at %p: v0=%c(%d,%d) v1=%c(%d,%d) v2=%c(%d,%d) [A addr, C coord, N no entry, O overwritten, K contested, S stale]\n", sampled,
+			                 (void *)p[0], status[0], (int)p[0][0], (int)p[0][1], status[1], (int)p[1][0], (int)p[1][1], status[2], (int)p[2][0], (int)p[2][1]);
+		}
+	}
 }
 
 void ClearSplits(void)
@@ -753,11 +789,11 @@ void ClearSplits(void)
 			}
 		}
 
-		Platform_LogWarn("[CTR PGXP]   textured: prims=%u affine=%u (%.1f%%) [FT3=%u/%u GT3=%u/%u FT4=%u/%u GT4=%u/%u] | untextured affine=%u | textured vertex misses: no-hook=%u overwritten=%u contested=%u stale=%u\n",
+		Platform_LogWarn("[CTR PGXP]   textured: prims=%u affine=%u (%.1f%%) [FT3=%u/%u GT3=%u/%u FT4=%u/%u GT4=%u/%u] | untextured affine=%u | textured vertex misses: no-hook=%u overwritten=%u contested=%u stale=%u | address table said: none=%u overwritten=%u\n",
 		                 texPrims, texDemoted, texPrims ? (100.0 * texDemoted / texPrims) : 0.0, s_pgxpStats.kindDemoted[1], s_pgxpStats.kindPrims[1],
 		                 s_pgxpStats.kindDemoted[5], s_pgxpStats.kindPrims[5], s_pgxpStats.kindDemoted[3], s_pgxpStats.kindPrims[3], s_pgxpStats.kindDemoted[7],
 		                 s_pgxpStats.kindPrims[7], flatDemoted, s_pgxpStats.missWhy[PGXP_MISS_NO_HOOK], s_pgxpStats.missWhy[PGXP_MISS_OVERWRITTEN],
-		                 s_pgxpStats.missWhy[PGXP_MISS_CONTESTED], s_pgxpStats.missWhy[PGXP_MISS_STALE]);
+		                 s_pgxpStats.missWhy[PGXP_MISS_CONTESTED], s_pgxpStats.missWhy[PGXP_MISS_STALE], s_pgxpStats.missShadowNone, s_pgxpStats.missShadowOverwritten);
 		memset(&s_pgxpStats, 0, sizeof(s_pgxpStats));
 	}
 
