@@ -173,6 +173,7 @@ typedef struct
 // transforms whole frames of vertices before the draw pass, so the
 // transform->store distance routinely exceeds a frame of pushes.
 // (sx, sy, SZ) uniqueness carries specificity; the era check only rejects old entries.
+#define PGXP_STATS_EPOCHS (120) // log coverage every this many frames
 #define PGXP_BIND_EPOCHS (8)    // ~4 frames for the SZ-matched path
 #define PGXP_XY_BIND_EPOCHS (2) // coordinate-only fallback: same frame only
 
@@ -212,6 +213,15 @@ internal u32 s_pgxpPackedSrcValue = 0;
 // Per-vertex side channel uploaded next to the vertex buffer: the view depth.
 // 0 means "no high-precision source, stay affine".
 internal float s_pgxpVertexData[MAX_VERTEX_BUFFER_SIZE];
+
+// Coverage counters for the periodic log line (only advanced while PGXP is on).
+// vertices: bound by address / by coordinate fallback / proven non-transform / unbound.
+// prims: corrected, demoted to affine because a vertex was unbound, 2D (rect, line, screen-aligned quad).
+internal struct
+{
+	u32 vtxAddr, vtxCoord, vtxNonXform, vtxMiss;
+	u32 primOk, primDemoted, prim2D;
+} s_pgxpStats;
 
 int NativeGpu_PgxpEnabled(void)
 {
@@ -582,6 +592,17 @@ internal void Pgxp_Mark2D(int base, int count)
 	}
 }
 
+// A primitive that is never PGXP-eligible (rect, line, screen-aligned quad).
+internal void Pgxp_Mark2DPrim(int base, int count)
+{
+	Pgxp_Mark2D(base, count);
+
+	if (NativeGpu_PgxpEnabled())
+	{
+		s_pgxpStats.prim2D++;
+	}
+}
+
 // Fills one vertex: its view depth, or 0 (affine) when nothing trustworthy binds.
 internal void Pgxp_FillVertex(int index, VERTTYPE *p)
 {
@@ -589,12 +610,24 @@ internal void Pgxp_FillVertex(int index, VERTTYPE *p)
 
 	// Address-keyed provenance first: exact, no coordinate matching involved.
 	// A proven non-transform field (-1) stays affine and blocks the fallback.
-	if (Pgxp_LookupShadow(p, &w) == 0)
+	const int shadow = Pgxp_LookupShadow(p, &w);
+
+	if (shadow == 1)
 	{
-		if (Pgxp_LookupVertex(p[0], p[1], &w) != 1)
-		{
-			w = 0.0f;
-		}
+		s_pgxpStats.vtxAddr++;
+	}
+	else if (shadow < 0)
+	{
+		s_pgxpStats.vtxNonXform++;
+	}
+	else if (Pgxp_LookupVertex(p[0], p[1], &w) == 1)
+	{
+		s_pgxpStats.vtxCoord++;
+	}
+	else
+	{
+		w = 0.0f;
+		s_pgxpStats.vtxMiss++;
 	}
 
 	s_pgxpVertexData[index] = w;
@@ -615,9 +648,12 @@ internal void Pgxp_RequireConsistent(int base, int count)
 		if (s_pgxpVertexData[base + i] == 0.0f)
 		{
 			Pgxp_Mark2D(base, count);
+			s_pgxpStats.primDemoted++;
 			return;
 		}
 	}
+
+	s_pgxpStats.primOk++;
 }
 
 // Resolve a primitive's vertices (all affine when PGXP is off).
@@ -647,6 +683,18 @@ void ClearSplits(void)
 	s_gpu.splits[0].psxTextureOutputSTP = false;
 	s_gpu.splits[0].psxDrawMaskSet = false;
 	s_gpu.framebufferFeedbackRunActive = false;
+
+	if (NativeGpu_PgxpEnabled() && ((s_pgxpEpoch % PGXP_STATS_EPOCHS) == 0))
+	{
+		const u32 prims = s_pgxpStats.primOk + s_pgxpStats.primDemoted + s_pgxpStats.prim2D;
+		const u32 eligible = s_pgxpStats.primOk + s_pgxpStats.primDemoted;
+
+		Platform_LogWarn("[CTR PGXP] %u frames: prims=%u 2D=%u 3D=%u corrected=%u (%.1f%% of 3D) affine-demoted=%u | vertices: addr=%u coord=%u non-xform=%u miss=%u\n",
+		                 (unsigned)PGXP_STATS_EPOCHS, prims, s_pgxpStats.prim2D, eligible, s_pgxpStats.primOk,
+		                 eligible ? (100.0 * s_pgxpStats.primOk / eligible) : 0.0, s_pgxpStats.primDemoted, s_pgxpStats.vtxAddr, s_pgxpStats.vtxCoord,
+		                 s_pgxpStats.vtxNonXform, s_pgxpStats.vtxMiss);
+		memset(&s_pgxpStats, 0, sizeof(s_pgxpStats));
+	}
 
 	// Frame boundary for PGXP matching: all lookups of this frame happened
 	// before this point (draw-time parsing), next frame's pushes come after.
@@ -778,7 +826,7 @@ void MakeLineArray(GrVertex *vertex, VERTTYPE *p0, VERTTYPE *p1)
 	DrawEnvOffset(&ofsX, &ofsY);
 
 	memset(vertex, 0, sizeof(GrVertex) * 4);
-	Pgxp_Mark2D((int)(vertex - s_gpu.vertexBuffer), 4);
+	Pgxp_Mark2DPrim((int)(vertex - s_gpu.vertexBuffer), 4);
 
 	if (dx > abs((s16)dy))
 	{ // horizontal
@@ -921,7 +969,7 @@ void MakeVertexQuad(GrVertex *vertex, VERTTYPE *p0, VERTTYPE *p1, VERTTYPE *p2, 
 	// instead of risking an exact-coordinate match with an unrelated 3D vertex.
 	if ((p0[0] == p3[0]) && (p1[0] == p2[0]) && (p0[1] == p1[1]) && (p2[1] == p3[1]))
 	{
-		Pgxp_Mark2D(s_gpu.vertexIndex, 4);
+		Pgxp_Mark2DPrim(s_gpu.vertexIndex, 4);
 	}
 	else
 	{
@@ -956,7 +1004,7 @@ void MakeVertexRect(GrVertex *vertex, VERTTYPE *p0, s16 w, s16 h)
 	// Rects (TILE/SPRT) are 2D elements: never eligible. Without this, stale
 	// depth left in the rolling side-channel buffer by an earlier 3D primitive
 	// would leak into HUD sprites. TriangulateQuad copies the slots.
-	Pgxp_Mark2D((int)(vertex - s_gpu.vertexBuffer), 4);
+	Pgxp_Mark2DPrim((int)(vertex - s_gpu.vertexBuffer), 4);
 
 	vertex[0].x = p0[0] + ofsX;
 	vertex[0].y = p0[1] + ofsY;
