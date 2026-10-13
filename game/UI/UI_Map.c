@@ -349,7 +349,7 @@ void UI_Map_DrawDrivers(struct UIMap *map, struct Thread *bucket, s16 *driverIco
 #if defined(CTR_NATIVE)
 		// The panel has room for the driver's face rather than a coloured dot,
 		// which makes the map readable at a glance.
-		if (Ctrds_Enabled())
+		if (Ctrds_MapOnCompanion())
 		{
 			Ctrds_DrawMapPortrait(map, &bucket->inst->matrix.t[0], d, iconID == UI_MAP_PLAYER_ICON_HUMAN);
 		}

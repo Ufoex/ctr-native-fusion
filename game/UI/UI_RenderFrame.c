@@ -790,7 +790,7 @@ void UI_RenderFrame_Racing()
 			struct UIMap ctrdsMap;
 			struct UIMap *drawMap = levPtrMap;
 
-			if (Ctrds_Enabled())
+			if (Ctrds_MapOnCompanion())
 			{
 				// Fit before remapping: the dots are placed from the same scale
 				// and anchor the background uses.
@@ -819,7 +819,7 @@ void UI_RenderFrame_Racing()
 			}
 
 #if defined(CTR_NATIVE)
-			if (Ctrds_Enabled())
+			if (Ctrds_MapOnCompanion())
 			{
 				mapPosX = (u32)g_ctrds.mapX;
 				mapPosY = (u32)g_ctrds.mapY;
