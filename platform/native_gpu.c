@@ -173,7 +173,8 @@ typedef struct
 // transforms whole frames of vertices before the draw pass, so the
 // transform->store distance routinely exceeds a frame of pushes.
 // (sx, sy, SZ) uniqueness carries specificity; the era check only rejects old entries.
-#define PGXP_SAMPLE_COUNT (24) // demoted GT3s listed once per run
+#define PGXP_SAMPLE_COUNT (6)   // demoted GT3s listed per stats window
+#define PGXP_SAMPLE_STRIDE (700) // ...taking every this-many-th one
 #define PGXP_STATS_EPOCHS (120) // log coverage every this many frames
 #define PGXP_BIND_EPOCHS (8)    // ~4 frames for the SZ-matched path
 #define PGXP_XY_BIND_EPOCHS (2) // coordinate-only fallback: same frame only
@@ -252,6 +253,7 @@ enum
 };
 
 internal int s_pgxpKind = PGXP_KIND_F3;
+internal int s_pgxpSampled = 0; // samples logged in the current stats window
 internal int s_pgxpShadowOverwritten = 0; // set by Pgxp_LookupShadow when it returns 0 for a changed field
 
 int NativeGpu_PgxpEnabled(void)
@@ -740,17 +742,16 @@ internal void Pgxp_FillPrimitive(int base, VERTTYPE **p, int count)
 
 	Pgxp_RequireConsistent(base, count);
 
-	// First few affine-demoted GT3s of the run: where they live and why each vertex missed.
-	if ((s_pgxpStats.primDemoted != demotedBefore) && (s_pgxpKind == PGXP_KIND_GT3))
+	// A spread of affine-demoted GT3s per stats window (every PGXP_SAMPLE_STRIDE-th,
+	// not the first ones, which all come from the same object): where they live and
+	// why each vertex missed.
+	if ((s_pgxpStats.primDemoted != demotedBefore) && (s_pgxpKind == PGXP_KIND_GT3) && ((s_pgxpStats.kindDemoted[PGXP_KIND_GT3] % PGXP_SAMPLE_STRIDE) == 1) &&
+	    (s_pgxpSampled < PGXP_SAMPLE_COUNT))
 	{
-		local_persist int sampled = 0;
-
-		if (sampled < PGXP_SAMPLE_COUNT)
-		{
-			sampled++;
-			Platform_LogWarn("[CTR PGXP] sample GT3 #%d at %p: v0=%c(%d,%d) v1=%c(%d,%d) v2=%c(%d,%d) [A addr, C coord, N no entry, O overwritten, K contested, S stale]\n", sampled,
-			                 (void *)p[0], status[0], (int)p[0][0], (int)p[0][1], status[1], (int)p[1][0], (int)p[1][1], status[2], (int)p[2][0], (int)p[2][1]);
-		}
+		s_pgxpSampled++;
+		Platform_LogWarn("[CTR PGXP] sample GT3 epoch=%u at %p: v0=%c(%d,%d) v1=%c(%d,%d) v2=%c(%d,%d) [A addr, C coord, N no entry, O overwritten, K contested, S stale]\n",
+		                 (unsigned)s_pgxpEpoch, (void *)p[0], status[0], (int)p[0][0], (int)p[0][1], status[1], (int)p[1][0], (int)p[1][1], status[2], (int)p[2][0],
+		                 (int)p[2][1]);
 	}
 }
 
@@ -795,6 +796,7 @@ void ClearSplits(void)
 		                 s_pgxpStats.kindPrims[7], flatDemoted, s_pgxpStats.missWhy[PGXP_MISS_NO_HOOK], s_pgxpStats.missWhy[PGXP_MISS_OVERWRITTEN],
 		                 s_pgxpStats.missWhy[PGXP_MISS_CONTESTED], s_pgxpStats.missWhy[PGXP_MISS_STALE], s_pgxpStats.missShadowNone, s_pgxpStats.missShadowOverwritten);
 		memset(&s_pgxpStats, 0, sizeof(s_pgxpStats));
+		s_pgxpSampled = 0;
 	}
 
 	// Frame boundary for PGXP matching: all lookups of this frame happened
