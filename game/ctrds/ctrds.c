@@ -1591,12 +1591,12 @@ s16 Ctrds_MapScale(void)
 
 s16 Ctrds_MapIconScale(void)
 {
-	return Ctrds_Enabled() ? g_ctrds.mapIconScale : CTRDS_FP_ONE;
+	return Ctrds_MapOnCompanion() ? g_ctrds.mapIconScale : CTRDS_FP_ONE;
 }
 
 void Ctrds_BeginMapScale(void)
 {
-	if (Ctrds_Enabled())
+	if (Ctrds_MapOnCompanion())
 	{
 		s_ctrdsMapScale = g_ctrds.mapScale;
 	}
@@ -1618,7 +1618,7 @@ void Ctrds_ScaleMap(struct UIMap *dst, const struct UIMap *src)
 
 	*dst = *src;
 
-	if (!Ctrds_Enabled())
+	if (!Ctrds_MapOnCompanion())
 	{
 		return;
 	}

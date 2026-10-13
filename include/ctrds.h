@@ -294,6 +294,14 @@ static inline int Ctrds_Enabled(void)
 	return g_ctrds.mode != CTRDS_DISABLED;
 }
 
+// The map is only re-fitted and enlarged for a real companion display. INLINE
+// draws companion elements into the one window, where that region is just the
+// middle of the game view, so the map would cover half of it.
+static inline int Ctrds_MapOnCompanion(void)
+{
+	return g_ctrds.mode == CTRDS_SECOND_SCREEN;
+}
+
 // Whether the frame-pacing compensation applies. It is not the same question as
 // whether there is a companion screen: the game is built around a 30fps VBlank
 // and everything here corrects for running it faster, which is just as true on a
