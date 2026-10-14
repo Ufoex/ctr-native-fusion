@@ -77,22 +77,22 @@ struct CtrdsLayout g_ctrds = {
     .vsyncsPerFlip = 1,
     .fxaa = 0,
     .crt = 0,
-    .dither = 1,
+    .dither = 0,
     .swapFaceButtons = 1,
     .touchControls = 0,
     .skipAv = 0,
     .primReject = 1,
-    .pgxpTextures = 0,
+    .pgxpTextures = 1,
     .hdArt = 1,
     .hdLog = 0,
     .hdDump = 0,
     .internalScale = 4,
-    .targetFps = 60,
+    .targetFps = 30,
 
     .mapRetailX = CTRDS_RETAIL_MAP_X,
     .mapRetailY = CTRDS_RETAIL_MAP_Y,
 
-    .increaseDrawDistance = 0,
+    .increaseDrawDistance = 1,
     .speedMultiplier = 100,
     .turnMultiplier = 100,
     .jumpMultiplier = 100,
@@ -1263,7 +1263,7 @@ void Ctrds_LoadConfig(void)
 			fprintf(f, "skip_av=%d\n", g_ctrds.skipAv);
 			fprintf(f, "# prim_reject: drop primitives too large for the PSX GPU (0 off, 1 on, 2 on+log)\n");
 			fprintf(f, "prim_reject=%d\n", g_ctrds.primReject);
-			fprintf(f, "# pgxp_textures: EXPERIMENTAL perspective-correct textures on 3D geometry (0/1)\n");
+			fprintf(f, "# pgxp_textures: perspective-correct textures on 3D geometry (0/1)\n");
 			fprintf(f, "pgxp_textures=%d\n", g_ctrds.pgxpTextures);
 			fprintf(f, "# hd_art: use the upscaled art in hd/ instead of the original sprites\n");
 			fprintf(f, "hd_art=%d\n", g_ctrds.hdArt);

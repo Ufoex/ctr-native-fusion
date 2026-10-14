@@ -258,11 +258,7 @@ internal int s_pgxpShadowOverwritten = 0; // set by Pgxp_LookupShadow when it re
 
 int NativeGpu_PgxpEnabled(void)
 {
-#if defined(__ANDROID__)
-	return 0;
-#else
 	return g_ctrds.pgxpTextures != 0;
-#endif
 }
 
 internal u32 Pgxp_AddrHash(const void *addr)

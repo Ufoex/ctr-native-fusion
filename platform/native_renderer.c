@@ -1094,7 +1094,7 @@ GLint u_ditherEnableLoc;
 	"		+3.0,  -1.0,  +2.0,  -2.0) / 255.0;\n"                     \
 	"	vec4 dither(vec4 color) {\n"                                \
 	"		if (ditherEnable == 0) { return color; }\n"                \
-	"		ivec2 dc = ivec2(mod(floor(v_ditherCoord), 4.0));\n"       \
+	"		ivec2 dc = ivec2(mod(floor(FS_DITHER), 4.0));\n"       \
 	"		color.xyz += vec3(c_dither[dc.x][dc.y] * v_texcoord.w);\n" \
 	"		return color;\n"                                           \
 	"	}\n"
@@ -1160,17 +1160,40 @@ GLint u_ditherEnableLoc;
 	    "	}\n"                                                                                                                                        \
 	    "	void main() {\n"                                                                                                                            \
 	    "		vec4 color = (bilinearFilter > 0) ? bilinearTextureSample(v_texcoord.xy) : nearestTextureSample(v_texcoord.xy);\n"                         \
-	    "		fragColor = dither(color * v_color);\n"                                                                                                    \
+	    "		fragColor = dither(color * FS_COLOR);\n"                                                                                                    \
 	    "		fragColor.a = (psxDrawMaskSet != 0 || (psxTextureOutputStp != 0 && sampledStp >= 0.5)) ? 1.0 : 0.0;\n"                                     \
 	    "	}\n"
 
 // Colour and dither coordinates stay screen-linear: with PGXP the clip w is the
 // view depth, and only the texture coordinates are meant to be perspective-correct.
 global_variable const char *gpu_shader_common = "	varying vec4 v_texcoord;\n"
-                                                "	noperspective varying vec4 v_color;\n"
                                                 "	varying vec4 v_page_clut;\n"
+                                                "	varying float v_z;\n"
+                                                "#ifdef NOPERSP_EMU\n"
+                                                // ES 3.0 has no noperspective: scale by the clip w going out and divide
+                                                // by the interpolated w coming in, which cancels the perspective divide.
+                                                "	varying vec4 v_colorW;\n"
+                                                "	varying vec2 v_ditherW;\n"
+                                                "	varying float v_w;\n"
+                                                "	#define VS_COLOR v_colorW\n"
+                                                "	#define VS_DITHER v_ditherW\n"
+                                                "	#define FS_COLOR (v_colorW / v_w)\n"
+                                                "	#define FS_DITHER (v_ditherW / v_w)\n"
+                                                "#else\n"
+                                                "	noperspective varying vec4 v_color;\n"
                                                 "	noperspective varying vec2 v_ditherCoord;\n"
-                                                "	varying float v_z;\n";
+                                                "	#define VS_COLOR v_color\n"
+                                                "	#define VS_DITHER v_ditherCoord\n"
+                                                "	#define FS_COLOR v_color\n"
+                                                "	#define FS_DITHER v_ditherCoord\n"
+                                                "#endif\n";
+
+#define GTE_NOPERSP_EMU                                                                  \
+	"#ifdef NOPERSP_EMU\n"                                                               \
+	"	v_colorW *= grW;\n"                                                             \
+	"	v_ditherW *= grW;\n"                                                            \
+	"	v_w = grW;\n"                                                                   \
+	"#endif\n"
 
 const char *gte_shader_4 = GPU_FRAGMENT_SAMPLE_SHADER(4);
 const char *gte_shader_8 = GPU_FRAGMENT_SAMPLE_SHADER(8);
@@ -1181,7 +1204,7 @@ const char *gte_shader_32_rgba = "	uniform sampler2D s_texture;\n"
                                  "	void main() {\n"
                                  "		vec2 tc = v_texcoord.xy * texelSize + texelSize * 0.5;\n"
                                  "		vec4 color = texture2D(s_texture, tc);\n"
-                                 "		fragColor = dither(color * v_color);\n"
+                                 "		fragColor = dither(color * FS_COLOR);\n"
                                  "		fragColor.a = float(psxDrawMaskSet);\n"
                                  "	}\n";
 
@@ -1203,17 +1226,17 @@ const char *gte_shader_32_rgba = "	uniform sampler2D s_texture;\n"
 	"	uniform int pgxpMode;\n"                                                                                     \
 	"	const vec2 c_UVFudge = vec2(0.00025, 0.00025);\n"                                                            \
 	"	void main() {\n"                                                                                             \
-	"		v_ditherCoord = a_position.xy;\n"                                                                           \
+	"		VS_DITHER = a_position.xy;\n"                                                                           \
 	"		v_texcoord = a_texcoord;\n"                                                                                 \
 	"		v_texcoord.xy += a_extra.xy * 0.5;\n"                                                                       \
-	"		v_color = a_color;\n"                                                                                       \
-	"		v_color.xyz *= a_texcoord.z;\n"                                                                             \
+	"		VS_COLOR = a_color;\n"                                                                                       \
+	"		VS_COLOR.xyz *= a_texcoord.z;\n"                                                                             \
 	"		v_page_clut.x = fract(a_position.z / 16.0) * " VRAM_WIDTH_GLSL ";\n"                                                     \
 	"		v_page_clut.y = floor(a_position.z / 16.0) * 256.0;\n"                                                      \
 	"		v_page_clut.z = fract(a_position.w / 64.0);\n"                                                              \
 	"		v_page_clut.w = floor(a_position.w / 64.0) / " VRAM_HEIGHT_GLSL ";\n"                                                      \
 	"		v_page_clut.xy += c_UVFudge;\n"                                                                             \
-	"		v_page_clut.zw += c_UVFudge;\n" GTE_PERSPECTIVE_CORRECTION "		v_z = (grOrtho.z - 40.0) * 0.005;\n" \
+	"		v_page_clut.zw += c_UVFudge;\n" GTE_PERSPECTIVE_CORRECTION GTE_NOPERSP_EMU "		v_z = (grOrtho.z - 40.0) * 0.005;\n" \
 	"	}\n"
 
 internal int NativeRenderer_Shader_CheckShaderStatus(GLuint shader)
@@ -1268,14 +1291,14 @@ internal ShaderID NativeRenderer_Shader_Compile(const char *source, bool isPsxSh
 	                               "precision highp float;\n"
 	                               "#define varying   out\n"
 	                               "#define attribute in\n"
-	                               "#define noperspective\n" // not in ES 3.0: PGXP is forced off here
+	                               "#define NOPERSP_EMU\n"
 	                               "#define texture2D texture\n";
 
 	const char *GLSL_HEADER_FRAG = "#version 300 es\n"
 	                               "precision highp int;\n"
 	                               "precision highp float;\n"
 	                               "#define varying     in\n"
-	                               "#define noperspective\n"
+	                               "#define NOPERSP_EMU\n"
 	                               "#define texture2D   texture\n"
 	                               "out vec4 fragColor;\n";
 #else
